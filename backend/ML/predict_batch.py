@@ -86,10 +86,15 @@ def default_model_path() -> Path:
     env = os.environ.get("CATBOOST_MODEL_PATH")
     if env:
         return Path(env).expanduser().resolve()
+    deployed = ML_DIR.parent / "models" / "catboost_model_2024_2025.pkl"
+    if deployed.exists():
+        return deployed.resolve()
     local = ML_DIR / "catboost_model.pkl"
     if local.exists():
         return local.resolve()
-    return (ML_DIR / "../../../../Project/models/catboost/catboost_model.pkl").resolve()
+    raise FileNotFoundError(
+        "CatBoost model not found. Expected backend/models/catboost_model_2024_2025.pkl"
+    )
 
 
 def load_medians() -> dict:

@@ -1,28 +1,31 @@
+import os
 import joblib
 import numpy as np
 import pandas as pd
 import shap
+from pathlib import Path
 from pymongo import MongoClient, UpdateOne
 from datetime import datetime, timezone
 
-from features_save_model_train import apply_calibration, bucket
+from calibration import apply_calibration, bucket
 
 # =========================
 # CONFIG
 # =========================
 
-MONGO_URI = "mongodb://localhost:27017"
-DB_NAME = "civic_lens"
-COLLECTION = "requests_clean"
-
-# ── Changed: new 2024+2025 p90 model + parquet ───────────────────────
-MODEL_PATH = "backend/models/catboost_model_2024_2025.pkl"
-FEATURE_STATS_PATH = "backend/models/feature_stats.pkl"
-FEATURES_PARQUET = "data/features_2024_2025.parquet"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODEL_PATH = REPO_ROOT / "backend/models/catboost_model_2024_2025.pkl"
+FEATURE_STATS_PATH = REPO_ROOT / "backend/models/feature_stats_full.pkl"
 PREDICTION_MODEL = "catboost_2024_2025"
 
-TARGET_YEAR = 2026
-REPREDICT = True
+MONGO_URI = os.environ.get("MONGODB_URI", os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
+DB_NAME = os.environ.get("DB_NAME", "civic_lens")
+COLLECTION = "requests_clean"
+
+TARGET_YEAR = int(os.environ.get("TARGET_YEAR", "2026"))
+REPREDICT = os.environ.get("REPREDICT", "true").lower() in ("1", "true", "yes")
+PREDICT_LIMIT = int(os.environ["PREDICT_LIMIT"]) if os.environ.get("PREDICT_LIMIT") else None
+DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 TOP_SHAP_FEATURES = 8
 BULK_BATCH_SIZE = 1000
 
@@ -51,6 +54,16 @@ ENRICHED_FEATURE_COLS = [
     "agency_unresolved",
 ]
 
+LOOKUP_MAP_KEYS = [
+    "complaint_median_map",
+    "agency_complaint_median_map",
+    "agency_stats_map",
+    "agency_zip_median_map",
+    "agency_dow_median_map",
+    "borough_complaint_median_map",
+    "agency_complaint_volume_map",
+]
+
 # =========================
 # LOOKUP MAPS
 # =========================
@@ -60,69 +73,46 @@ def _key(*parts):
     return "|".join(str(p) for p in parts)
 
 
-def build_lookup_maps_from_parquet():
-    """Rebuild train-time lookup maps from parquet when pkl is incomplete."""
-    print("Building lookup maps from training parquet...")
-    train = pd.read_parquet(FEATURES_PARQUET)
-    train = train[train["split"] == "train"].copy()
-    train["incident_zip"] = train["incident_zip"].astype(str)
-
-    return {
-        "complaint_median_map": train.groupby("complaint_type")["response_hours"].median().astype(float).to_dict(),
-        "agency_complaint_median_map": {
-            _key(a, c): float(v)
-            for (a, c), v in train.groupby(["agency", "complaint_type"])["response_hours"].median().items()
-        },
-        "agency_stats_map": {
-            agency: {
-                "agency_median_hours": float(row["agency_median_hours"]),
-                "agency_volume": float(row["agency_volume"]),
-                "agency_unresolved": float(row["agency_unresolved"]),
-            }
-            for agency, row in train.groupby("agency").agg(
-                agency_median_hours=("response_hours", "median"),
-                agency_volume=("unique_key", "count"),
-                agency_unresolved=("is_unresolved", "mean"),
-            ).iterrows()
-        },
-        "agency_zip_median_map": {
-            _key(a, z): float(v)
-            for (a, z), v in train.groupby(["agency", "incident_zip"])["response_hours"].median().items()
-        },
-        "agency_dow_median_map": {
-            _key(a, d): float(v)
-            for (a, d), v in train.groupby(["agency", "day_of_week"])["response_hours"].median().items()
-        },
-        "borough_complaint_median_map": {
-            _key(b, c): float(v)
-            for (b, c), v in train.groupby(["borough", "complaint_type"])["response_hours"].median().items()
-        },
-        "agency_complaint_volume_map": {
-            _key(a, c): int(v)
-            for (a, c), v in train.groupby(["agency", "complaint_type"]).size().items()
-        },
-    }
-
-
 def load_lookup_maps(feature_stats):
-    # ── Changed: always rebuild from the new parquet ─────────────────
-    # The feature_stats.pkl was built from the old 2025 parquet, so we
-    # force a rebuild from features_2024_2025.parquet to get full,
-    # correctly-scoped lookup maps for the new model.
-    return build_lookup_maps_from_parquet()
+    """Load all seven keyed lookup maps from feature_stats_full.pkl."""
+    missing = [key for key in LOOKUP_MAP_KEYS if key not in feature_stats]
+    if missing:
+        raise KeyError(f"feature_stats missing lookup maps: {missing}")
+    return {key: feature_stats[key] for key in LOOKUP_MAP_KEYS}
 
 
-def compute_workload(docs_df):
-    """Rolling 24h / 7d agency workload using 2024-2025 history + 2026 target rows."""
-    print("Computing agency workload features...")
-    hist = pd.read_parquet(
-        FEATURES_PARQUET,
-        columns=["created_date", "agency", "unique_key"],
-    )
-    hist["created_date"] = pd.to_datetime(hist["created_date"])
+def compute_workload(collection, docs_df):
+    """Rolling 24h / 7d agency workload from pre-target-year MongoDB history + batch rows.
 
+    Matches the former parquet path: history is all records with created_date <
+    TARGET_YEAR-01-01; target-year counts come only from the current prediction
+    batch. Process the full unresolved batch for correct intra-year workload.
+    """
+    print("Computing agency workload features from MongoDB...")
     target = docs_df[["created_date", "agency", "unique_key", "_row_id"]].copy()
     target["created_date"] = pd.to_datetime(target["created_date"])
+
+    agencies = target["agency"].dropna().astype(str).unique().tolist()
+    if not agencies:
+        return pd.DataFrame(
+            {"agency_workload_24h": [], "agency_workload_7d": []},
+            index=docs_df["_row_id"],
+        )
+
+    target_year_start = datetime(TARGET_YEAR, 1, 1)
+    hist_rows = list(
+        collection.find(
+            {
+                "agency": {"$in": agencies},
+                "created_date": {"$lt": target_year_start},
+            },
+            {"_id": 0, "created_date": 1, "agency": 1, "unique_key": 1},
+        )
+    )
+    hist = pd.DataFrame(hist_rows)
+    if hist.empty:
+        hist = pd.DataFrame(columns=["created_date", "agency", "unique_key"])
+    hist["created_date"] = pd.to_datetime(hist["created_date"])
 
     combined = pd.concat(
         [
@@ -244,7 +234,10 @@ query = {
 if not REPREDICT:
     query["predicted_response_hours"] = {"$exists": False}
 
-docs = list(collection.find(query))
+cursor = collection.find(query)
+if PREDICT_LIMIT:
+    cursor = cursor.limit(PREDICT_LIMIT)
+docs = list(cursor)
 print(f"Fetched {len(docs)} unresolved {TARGET_YEAR} complaints")
 
 if len(docs) == 0:
@@ -257,7 +250,7 @@ if len(docs) == 0:
 
 docs_df = pd.DataFrame(docs)
 docs_df["_row_id"] = np.arange(len(docs_df))
-workload_df = compute_workload(docs_df)
+workload_df = compute_workload(collection, docs_df)
 
 enriched_rows = []
 for i, doc in enumerate(docs):
@@ -302,15 +295,20 @@ for b in ["Same Day", "1-3 Days", "3-7 Days", "7+ Days"]:
 # SHAP EXPLANATION
 # =========================
 
-print("\nComputing SHAP values...")
-explainer = shap.TreeExplainer(model)
-shap_values = explainer.shap_values(X)
+if not DRY_RUN:
+    print("\nComputing SHAP values...")
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X)
 
-base_value = explainer.expected_value
-if isinstance(base_value, np.ndarray):
-    base_value = float(base_value[0])
+    base_value = explainer.expected_value
+    if isinstance(base_value, np.ndarray):
+        base_value = float(base_value[0])
+    else:
+        base_value = float(base_value)
 else:
-    base_value = float(base_value)
+    shap_values = None
+    base_value = 0.0
+    print("\nDRY_RUN=1 — skipping SHAP computation")
 
 
 def _serialize_feature_value(val):
@@ -353,6 +351,29 @@ def build_shap_payload(row_idx, shap_row):
 # =========================
 # BUILD MONGO UPDATE OPS
 # =========================
+
+if DRY_RUN:
+    print("\nDRY_RUN=1 — skipping MongoDB writes")
+    compare_limit = int(os.environ.get("COMPARE_LIMIT", "200"))
+    mismatches = 0
+    compared = 0
+    for i, doc in enumerate(docs):
+        stored = doc.get("predicted_response_hours")
+        if stored is None:
+            continue
+        if compared >= compare_limit:
+            break
+        compared += 1
+        pct_diff = abs(float(pred_hours[i]) - float(stored)) / max(float(stored), 1e-9)
+        if pct_diff > 0.01:
+            mismatches += 1
+            if mismatches <= 5:
+                print(
+                    f"  mismatch unique_key={doc.get('unique_key')} "
+                    f"stored={stored:.4f} new={pred_hours[i]:.4f} diff={pct_diff*100:.2f}%"
+                )
+    print(f"Prediction mismatches >1%: {mismatches}/{compared} (batch size {len(docs)})")
+    raise SystemExit(0)
 
 now = datetime.now(timezone.utc)
 ops = []

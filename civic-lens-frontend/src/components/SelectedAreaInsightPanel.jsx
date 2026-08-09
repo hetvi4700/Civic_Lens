@@ -1,4 +1,4 @@
-import { Box, Typography, Chip, alpha, Divider } from '@mui/material';
+import { Box, Typography, alpha, Divider } from '@mui/material';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import PlaceOutlinedIcon from '@mui/icons-material/PlaceOutlined';
 import { useAppColors, useColorMode } from '../ColorModeContext';
@@ -36,13 +36,11 @@ function MetricRow({ label, value, valueColor, colors, semantic }) {
 export default function SelectedAreaInsightPanel({ summary, drivers = [] }) {
   const colors = useAppColors();
   const { mode } = useColorMode();
-  const isLight = mode === 'light';
   const semantic = getDashboardSemanticColors(colors, mode);
-  const boroughColor = getBoroughColor(normalizeBoroughName(summary?.areaName), mode);
 
   const {
     areaName = '—',
-    isDefault = true,
+    isCitywide = true,
     totalRequests = 0,
     avgResponseHours = 0,
     unresolvedRate = 0,
@@ -50,6 +48,9 @@ export default function SelectedAreaInsightPanel({ summary, drivers = [] }) {
     insight = '',
   } = summary ?? {};
 
+  const headerColor = isCitywide
+    ? semantic.title
+    : getBoroughColor(normalizeBoroughName(areaName), mode);
   const topDrivers = drivers.slice(0, MAX_DRIVERS);
 
   return (
@@ -78,39 +79,22 @@ export default function SelectedAreaInsightPanel({ summary, drivers = [] }) {
         </Typography>
       </Box>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0, flex: 1 }}>
-          <PlaceOutlinedIcon sx={{ fontSize: 16, color: boroughColor, flexShrink: 0 }} />
-          <Typography
-            sx={{
-              fontWeight: 800,
-              fontSize: '1.05rem',
-              color: boroughColor,
-              letterSpacing: '-0.02em',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {areaName}
-          </Typography>
-        </Box>
-        {isDefault && areaName !== '—' && (
-          <Chip
-            label="Highest burden"
-            size="small"
-            sx={{
-              height: 22,
-              fontSize: '0.625rem',
-              fontWeight: 600,
-              flexShrink: 0,
-              bgcolor: alpha(semantic.burden, isLight ? 0.1 : 0.16),
-              color: semantic.title,
-              border: `1px solid ${alpha(semantic.burden, 0.22)}`,
-            }}
-          />
-        )}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+        <PlaceOutlinedIcon sx={{ fontSize: 16, color: headerColor, flexShrink: 0 }} />
+        <Typography
+          sx={{
+            fontWeight: 800,
+            fontSize: '1.05rem',
+            color: headerColor,
+            letterSpacing: '-0.02em',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {areaName}
+        </Typography>
       </Box>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.65 }}>

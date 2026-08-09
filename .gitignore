@@ -6,5 +6,6 @@ dist/
 .env.local
 .env.*.local
 
-# CatBoost model artifact (~43 MB) — copy from VA/Project/models/catboost/
+# Legacy single-model paths (superseded by backend/models/)
+backend/ML/catboost_model.pkl
 backend/ml/catboost_model.pkl

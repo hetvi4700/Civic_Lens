@@ -40,26 +40,29 @@ const METRICS = [
 
 const DEFAULT_STAT = (borough) => ({
   borough,
-  count: 0,
-  avgResponseHours: 0,
-  unresolvedRate: 0,
-  highDelayCount: 0,
-  highDelayRate: 0,
-  burdenScore: 0,
+  hasData: false,
+  count: null,
+  avgResponseHours: null,
+  unresolvedRate: null,
+  highDelayCount: null,
+  highDelayRate: null,
+  burdenScore: null,
 });
 
 function mergeBoroughStats(boroughStats) {
   const lookup = {};
   (boroughStats || []).forEach((entry) => {
     const borough = normalizeBoroughName(entry.borough);
-    lookup[borough] = { ...entry, borough };
+    if (!ALL_BOROUGHS.includes(borough)) return;
+    lookup[borough] = { ...entry, borough, hasData: true };
   });
-  return ALL_BOROUGHS.map((borough) => ({ ...DEFAULT_STAT(borough), ...lookup[borough] }));
+  return ALL_BOROUGHS.map((borough) => lookup[borough] ?? DEFAULT_STAT(borough));
 }
 
 function getMetricValue(entry, metricKey) {
-  const value = Number(entry?.[metricKey] ?? 0);
-  return Number.isFinite(value) ? value : 0;
+  if (!entry?.hasData) return null;
+  const value = Number(entry?.[metricKey]);
+  return Number.isFinite(value) ? value : null;
 }
 
 function getMetricMeta(metricKey) {
@@ -71,7 +74,10 @@ function shortBoroughName(name) {
 }
 
 function getMetricDomain(metricKey, stats) {
-  const values = stats.map((entry) => getMetricValue(entry, metricKey));
+  const values = stats
+    .filter((entry) => entry.hasData)
+    .map((entry) => getMetricValue(entry, metricKey))
+    .filter((value) => value != null);
   const [minValue, maxValue] = d3.extent(values);
   return {
     domainMin: minValue ?? 0,
@@ -409,12 +415,19 @@ export default function ServiceBurdenChoropleth({
       .append('path')
       .attr('class', 'borough-shape')
       .attr('d', (d) => path(d))
-      .attr('fill', (d) => getBoroughShade(d.borough, mode, 'map'))
-      .attr('fill-opacity', (d) => getMetricFillOpacity(
-        getMetricValue(d.stats, metric),
-        domainMin,
-        domainMax,
+      .attr('fill', (d) => (
+        d.stats?.hasData
+          ? getBoroughShade(d.borough, mode, 'map')
+          : alpha(semantic.muted, mode === 'light' ? 0.18 : 0.24)
       ))
+      .attr('fill-opacity', (d) => {
+        if (!d.stats?.hasData) return 0.55;
+        return getMetricFillOpacity(
+          getMetricValue(d.stats, metric),
+          domainMin,
+          domainMax,
+        );
+      })
       .attr('stroke', (d) => (
         selectedBorough === d.borough
           ? hoverStrokeColor(d.borough)
@@ -617,7 +630,7 @@ export default function ServiceBurdenChoropleth({
                   containerWidth={dimensions.width}
                   containerHeight={dimensions.height}
                   title={tooltip.data.borough}
-                  rows={[
+                  rows={tooltip.data.hasData ? [
                     { label: 'Requests', value: tooltip.data.count.toLocaleString() },
                     { label: 'Avg response', value: formatHours(tooltip.data.avgResponseHours) },
                     { label: 'Unresolved rate', value: `${(tooltip.data.unresolvedRate * 100).toFixed(1)}%` },
@@ -626,6 +639,8 @@ export default function ServiceBurdenChoropleth({
                       value: `${Number(tooltip.data.highDelayCount ?? 0).toLocaleString()} (${((tooltip.data.highDelayRate ?? 0) * 100).toFixed(1)}%)`,
                     },
                     { label: 'Burden score', value: tooltip.data.burdenScore.toFixed(2) },
+                  ] : [
+                    { label: 'Status', value: 'No data for current filters' },
                   ]}
                 />
               );

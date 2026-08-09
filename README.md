@@ -244,28 +244,38 @@ Scripts live in `preprocessing-training/`:
 
 | Script | Purpose |
 |--------|---------|
-| `data.py` | Download, clean, and load NYC 311 records into MongoDB |
-| `train-val-test-data.py` | Feature engineering with chronological splits |
-| `training.py` | CatBoost training, evaluation, and model export |
+| `ingest.py` | Download, clean, and upsert NYC 311 records into MongoDB |
+| `export_feature_stats.py` | One-time export of lookup maps + medians into `feature_stats_full.pkl` |
+| `training.py` | CatBoost training on p95 winsorized parquet (research path — see below) |
 | `store-prediction-mongodb.py` | Run inference on open requests, compute SHAP values, and write predictions + explanations into `requests_clean` |
 
-**Python dependencies:**
+**Python dependencies** (from repo root):
 
 ```bash
-pip install pandas pymongo requests holidays catboost scikit-learn joblib pyarrow shap
+pip install -r backend/ML/requirements.txt
 ```
 
 **Steps:**
 
 1. Get an NYC Open Data app token.
-2. Add it to `backend/.env` as `APP_TOKEN`.
+2. Add it to `backend/.env` as `APP_TOKEN` (and `MONGODB_URI` / `DB_NAME` if not using defaults).
 3. Start local MongoDB using MongoDB Compass or your system's MongoDB service.
-4. Run `data.py` to download and clean NYC 311 records.
-5. Run `train-val-test-data.py` to create historical agency, ZIP, borough, complaint, and workload features.
-6. Run `training.py` to train and evaluate the CatBoost model.
-7. Run `store-prediction-mongodb.py` to generate predictions and SHAP explanations and store them in MongoDB (`requests_clean`).
-8. Verify enriched records in MongoDB.
-9. Start the backend and frontend (`npm run dev` from the project root).
+4. Run `python preprocessing-training/ingest.py` to download and upsert NYC 311 records.
+5. Run `python preprocessing-training/store-prediction-mongodb.py` to generate predictions and SHAP explanations and store them in MongoDB (`requests_clean`).
+6. Verify enriched records in MongoDB.
+7. Start the backend and frontend (`npm run dev` from the project root).
+
+> Model artifacts ship in `backend/models/` (`catboost_model_2024_2025.pkl` + `feature_stats_full.pkl`). No external parquet or VA/Project paths are required for inference.
+
+### Deployed model vs. training.py (p90 vs. p95)
+
+| Artifact | Winsorization | Used for |
+|----------|---------------|----------|
+| `backend/models/catboost_model_2024_2025.pkl` | **p90** (~231 h train cap) | **Production inference** (`store-prediction-mongodb.py`) and dashboard |
+| `backend/models/feature_stats_full.pkl` | Lookup maps from p90 train split | Inference fallbacks + calibration bands |
+| `training.py` output (`catboost_model_2024_2025_p95.pkl`) | **p95** (~591 h train cap) | Research / retraining only — **not deployed** |
+
+Reported bucket-accuracy metrics (especially **7+ Days** recall) in project documentation came from the **p90 deployed model**. Running `training.py` does not reproduce those artifacts or metrics.
 
 > This path may take significant time and disk space because the NYC 311 dataset is large. For a faster review, use the [Box data setup](#data-setup-processed-2026-data-from-box).
 

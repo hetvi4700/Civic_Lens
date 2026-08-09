@@ -1,4 +1,11 @@
-catboost>=1.2
-joblib>=1.3
-numpy>=1.24
-pandas>=2.0
+# Python 3.12 recommended for CI (validated: 3.9.6 and 3.14.1 also load the model)
+catboost==1.2.10
+joblib==1.5.3
+numpy==2.4.6
+pandas==3.0.3
+pymongo==4.17.0
+shap==0.51.0
+scikit-learn==1.8.0
+requests==2.34.2
+holidays==0.97
+pyarrow==24.0.0

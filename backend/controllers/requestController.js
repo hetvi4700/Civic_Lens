@@ -2,14 +2,9 @@ import Request from '../models/Request.js';
 import { buildMongoFilter, parseCaseListSort } from '../utils/queryFilters.js';
 import {
   getDefaultRequestFilter,
-  getMlEligibleFilter,
   normalizeRequestForApi,
-  normalizeRequestsForApi,
 } from '../utils/normalizeRequest.js';
 
-const DEFAULT_PAGE_SIZE = Number(process.env.PAGE_SIZE || 5000);
-const MAX_PAGE_SIZE = Number(process.env.MAX_PAGE_SIZE || 10000);
-const DEFAULT_UNFILTERED_LIMIT = Number(process.env.DEFAULT_UNFILTERED_LIMIT || 10000);
 const CASE_LIST_PAGE_SIZE = Number(process.env.CASE_LIST_PAGE_SIZE || 50);
 const CASE_LIST_MAX_PAGE = Number(process.env.CASE_LIST_MAX_PAGE || 200);
 
@@ -26,20 +21,17 @@ const CASE_LIST_PROJECTION = {
   is_unresolved: 1,
 };
 
-function parsePagination(req) {
-  const caseList = req.query.caseList === '1' || req.query.caseList === 'true';
-  const hasFilters = req.query.hasFilters === '1' || req.query.hasFilters === 'true';
-  const defaultLimit = caseList
-    ? CASE_LIST_PAGE_SIZE
-    : (hasFilters ? DEFAULT_PAGE_SIZE : DEFAULT_UNFILTERED_LIMIT);
-  const maxLimit = caseList ? CASE_LIST_MAX_PAGE : MAX_PAGE_SIZE;
+function isCaseListRequest(req) {
+  return req.query.caseList === '1' || req.query.caseList === 'true';
+}
 
+function parseCaseListPagination(req) {
   const limit = Math.min(
-    Math.max(Number(req.query.limit) || defaultLimit, 1),
-    maxLimit,
+    Math.max(Number(req.query.limit) || CASE_LIST_PAGE_SIZE, 1),
+    CASE_LIST_MAX_PAGE,
   );
   const skip = Math.max(Number(req.query.skip) || 0, 0);
-  return { limit, skip, caseList };
+  return { limit, skip };
 }
 
 function idLookup(id) {
@@ -49,16 +41,32 @@ function idLookup(id) {
     : { unique_key: id };
 }
 
+/** List responses never include SHAP or model_features — use GET /api/requests/:id. */
+function normalizeCaseListRecords(docs) {
+  return docs.map((doc) => {
+    const normalized = normalizeRequestForApi(doc);
+    delete normalized.shap_explanation;
+    delete normalized.model_features;
+    return normalized;
+  });
+}
+
 export async function getAllRequests(req, res) {
   try {
+    if (!isCaseListRequest(req)) {
+      return res.status(400).json({
+        error: 'This endpoint requires caseList=1. Use GET /api/requests/:id for full request details.',
+      });
+    }
+
     const filter = buildMongoFilter(req);
-    const { limit, skip, caseList } = parsePagination(req);
+    const { limit, skip } = parseCaseListPagination(req);
     const countOnly = req.query.countOnly === '1' || req.query.countOnly === 'true';
     const skipCount = req.query.skipCount === '1'
       || req.query.skipCount === 'true'
-      || (caseList && !countOnly && req.query.skipCount !== '0');
+      || (!countOnly && req.query.skipCount !== '0');
 
-    if (caseList && countOnly) {
+    if (countOnly) {
       const total = await Request.countDocuments(filter);
       return res.json({
         total,
@@ -67,23 +75,19 @@ export async function getAllRequests(req, res) {
       });
     }
 
-    const sort = caseList ? parseCaseListSort(req) : { created_date: -1 };
-
-    let query = Request.find(filter)
-      .sort(sort)
+    const docs = await Request.find(filter)
+      .select(CASE_LIST_PROJECTION)
+      .sort(parseCaseListSort(req))
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean()
+      .exec();
 
-    if (caseList) {
-      query = query.select(CASE_LIST_PROJECTION);
-    }
-
-    const docs = await query.lean().exec();
-    const records = normalizeRequestsForApi(docs);
+    const records = normalizeCaseListRecords(docs);
 
     let total = null;
     let hasMore;
-    if (caseList && skipCount) {
+    if (skipCount) {
       hasMore = records.length === limit;
     } else {
       total = await Request.countDocuments(filter);
@@ -98,36 +102,8 @@ export async function getAllRequests(req, res) {
       hasMore,
       year: filter.created_date?.$gte?.getUTCFullYear?.() ?? null,
       filtered: true,
-      caseList: Boolean(caseList),
-      countPending: caseList && skipCount,
-    });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function getRequestFacets(req, res) {
-  try {
-    const base = getDefaultRequestFilter();
-    const [borough, complaint_type, agency, status, season, year] = await Promise.all([
-      Request.distinct('borough', base),
-      Request.distinct('complaint_type', base),
-      Request.distinct('agency', base),
-      Request.distinct('status', base),
-      Request.distinct('season', base),
-      Request.distinct('year', base),
-    ]);
-
-    const sortStr = (arr) => arr.filter(Boolean).map(String).sort((a, b) => a.localeCompare(b));
-    const sortNum = (arr) => arr.filter((v) => v != null).map(Number).sort((a, b) => b - a);
-
-    res.json({
-      borough: sortStr(borough),
-      complaint_type: sortStr(complaint_type),
-      agency: sortStr(agency),
-      status: sortStr(status),
-      season: sortStr(season),
-      year: sortNum(year),
+      caseList: true,
+      countPending: skipCount,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -142,85 +118,6 @@ export async function getRequestById(req, res) {
     const doc = await Request.findOne(filter).lean().exec();
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(normalizeRequestForApi(doc));
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function getRequestStats(req, res) {
-  try {
-    const baseFilter = getDefaultRequestFilter();
-    const mlFilter = getMlEligibleFilter();
-
-    const [total, mlEligible, resolved, openStatus] = await Promise.all([
-      Request.countDocuments(baseFilter),
-      Request.countDocuments(mlFilter),
-      Request.countDocuments({ ...baseFilter, is_unresolved: 0 }),
-      Request.countDocuments({ ...baseFilter, status: 'Open' }),
-    ]);
-
-    res.json({
-      year: baseFilter.created_date?.$gte?.getUTCFullYear?.() ?? null,
-      total,
-      mlEligible,
-      resolved,
-      openStatus,
-    });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function createRequest(req, res) {
-  try {
-    const payload = req.body;
-    const doc = await Request.create(payload);
-    res.status(201).json(normalizeRequestForApi(doc.toObject()));
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function updateRequest(req, res) {
-  try {
-    const { id } = req.params;
-    const payload = req.body;
-    const doc = await Request.findOneAndUpdate(
-      { $or: [{ unique_key: id }, { _id: id }] },
-      payload,
-      { new: true },
-    ).lean().exec();
-    if (!doc) return res.status(404).json({ error: 'Not found' });
-    res.json(normalizeRequestForApi(doc));
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function deleteRequest(req, res) {
-  try {
-    const { id } = req.params;
-    const doc = await Request.findOneAndDelete({ $or: [{ unique_key: id }, { _id: id }] }).lean().exec();
-    if (!doc) return res.status(404).json({ error: 'Not found' });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-}
-
-export async function bulkImport(req, res) {
-  try {
-    const arr = Array.isArray(req.body) ? req.body : req.body.records ?? [];
-    if (!arr.length) return res.status(400).json({ error: 'No records' });
-    const ops = arr.map((r) => ({
-      updateOne: {
-        filter: { unique_key: r.unique_key },
-        update: { $set: r },
-        upsert: true,
-      },
-    }));
-    const result = await Request.bulkWrite(ops);
-    res.json({ inserted: result.upsertedCount || 0, matched: result.matchedCount || 0 });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -1,5 +1,9 @@
 import Request from '../models/Request.js';
-import { buildMapMongoFilter, buildMongoFilter } from '../utils/queryFilters.js';
+import {
+  buildMapMongoFilter,
+  buildMongoFilter,
+  buildMongoFilterExcluding,
+} from '../utils/queryFilters.js';
 import { normalizeMapPoint } from '../utils/delayBuckets.js';
 import { getCached, setCached, buildCacheKey } from './aggregationCache.js';
 import {
@@ -104,54 +108,61 @@ export async function runStatsAggregation(filter) {
   return formatStatsRow(totals, topComplaint);
 }
 
-export async function runDashboardAggregation(filter) {
-  const [result] = await Request.aggregate([
-    { $match: filter },
-    {
-      $facet: {
-        statsTotals: [
-          {
-            $group: {
-              _id: null,
-              ...GROUP_METRICS,
-              highRiskCount: {
-                $sum: { $cond: [{ $gte: ['$delay_risk_score', 0.75] }, 1, 0] },
+export async function runDashboardAggregation(filter, boroughFilter = filter) {
+  const [dashboardResult, boroughRows] = await Promise.all([
+    Request.aggregate([
+      { $match: filter },
+      {
+        $facet: {
+          statsTotals: [
+            {
+              $group: {
+                _id: null,
+                ...GROUP_METRICS,
+                highRiskCount: {
+                  $sum: { $cond: [{ $gte: ['$delay_risk_score', 0.75] }, 1, 0] },
+                },
               },
             },
-          },
-        ],
-        topComplaint: [
-          { $group: { _id: '$complaint_type', count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-          { $limit: 1 },
-        ],
-        boroughs: [
-          { $group: { _id: '$borough', ...GROUP_METRICS } },
-        ],
-        complaints: [
-          { $group: { _id: '$complaint_type', ...GROUP_METRICS } },
-          { $sort: { count: -1 } },
-          { $limit: 10 },
-        ],
-        timeline: [
-          {
-            $group: {
-              _id: { year: '$year', month: '$month' },
-              count: { $sum: 1 },
-              avgResponseHours: { $avg: '$response_hours' },
-              avgPredictedHours: { $avg: '$predicted_response_hours' },
-              unresolvedCount: {
-                $sum: { $cond: [unresolvedCond(), 1, 0] },
+          ],
+          topComplaint: [
+            { $group: { _id: '$complaint_type', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 1 },
+          ],
+          complaints: [
+            { $group: { _id: '$complaint_type', ...GROUP_METRICS } },
+            { $sort: { count: -1 } },
+            { $limit: 10 },
+          ],
+          timeline: [
+            {
+              $group: {
+                _id: { year: '$year', month: '$month' },
+                count: { $sum: 1 },
+                avgResponseHours: { $avg: '$response_hours' },
+                avgPredictedHours: { $avg: '$predicted_response_hours' },
+                unresolvedCount: {
+                  $sum: { $cond: [unresolvedCond(), 1, 0] },
+                },
               },
             },
-          },
-          { $sort: { '_id.year': 1, '_id.month': 1 } },
-        ],
+            { $sort: { '_id.year': 1, '_id.month': 1 } },
+          ],
+        },
       },
-    },
+    ]),
+    Request.aggregate([
+      { $match: boroughFilter },
+      { $group: { _id: '$borough', ...GROUP_METRICS } },
+    ]),
   ]);
 
-  return formatDashboardBundle(result);
+  const result = dashboardResult[0] ?? {};
+  return formatDashboardBundle({
+    ...result,
+    boroughs: boroughRows,
+  });
 }
 
 function normalizeMapRecords(records) {
@@ -191,7 +202,8 @@ export async function getDashboardBundleData(req) {
   if (cached) return { payload: cached, cache: 'HIT' };
 
   const filter = buildMongoFilter(req);
-  const payload = await runDashboardAggregation(filter);
+  const boroughFilter = buildMongoFilterExcluding(req, 'borough');
+  const payload = await runDashboardAggregation(filter, boroughFilter);
   setCached(cacheKey, payload);
   return { payload, cache: 'MISS' };
 }

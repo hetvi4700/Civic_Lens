@@ -3,7 +3,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import requestsRouter from './routes/requests.js';
-import predictionRouter from './routes/predictionRoutes.js';
 import statsRouter from './routes/stats.js';
 import { trySeedDataIfEmpty } from './services/seedData.js';
 import { ensureRequestIndexes } from './services/ensureIndexes.js';
@@ -12,9 +11,17 @@ import { getDefaultRequestFilter, getMlEligibleFilter } from './utils/normalizeR
 
 dotenv.config();
 
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+app.use(cors({
+  origin: corsOrigins,
+  methods: ['GET', 'OPTIONS'],
+}));
+app.use(express.json({ limit: '100kb' }));
 
 const PORT = process.env.PORT || 5001;
 const MONGO = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
@@ -25,7 +32,6 @@ async function start() {
     await mongoose.connect(MONGO, { dbName: DB_NAME });
     console.log('Connected to MongoDB', DB_NAME);
 
-    // seed data if empty (imports frontend mockRequests)
     await trySeedDataIfEmpty();
 
     const collection = mongoose.connection.db.collection('requests_clean');
@@ -41,7 +47,6 @@ async function start() {
     console.log('ML-eligible (unresolved / Open):', mlEligibleCount.toLocaleString());
 
     app.use('/api/requests', requestsRouter);
-    app.use('/api/predict', predictionRouter);
     app.use('/api', statsRouter);
 
     app.get('/api/health', (_req, res) => res.json({

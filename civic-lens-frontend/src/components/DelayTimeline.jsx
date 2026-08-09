@@ -283,7 +283,10 @@ export default function DelayTimeline({
     const source = viewMode === 'resolved' ? resolvedSource : unresolvedSource;
     const normalized = (source || []).map(
       viewMode === 'resolved' ? normalizeResolvedEntry : normalizeUnresolvedEntry,
-    );
+    ).map((entry, index, arr) => ({
+      ...entry,
+      isIncomplete: viewMode === 'resolved' && arr.length > 1 && index >= arr.length - 2,
+    }));
 
     const hoursKey = viewMode === 'resolved' ? 'avgResponseHours' : 'avgPredictedHours';
     return detectAnomalies(normalized, hoursKey);
@@ -349,7 +352,7 @@ export default function DelayTimeline({
 
     const { width, height } = dimensions;
     const topMargin = 8 + legendHeight;
-    const bottomMargin = brushEnabled ? BRUSH_HEIGHT + 12 : (compactFooter ? 4 : 8);
+    const bottomMargin = brushEnabled ? BRUSH_HEIGHT + 12 : (compactFooter ? 28 : 8);
     const margin = {
       top: topMargin,
       right: 6 + RIGHT_AXIS_WIDTH,
@@ -517,6 +520,7 @@ export default function DelayTimeline({
           .attr('width', barWidth)
           .attr('height', (d) => Math.max(0, yCount(d[0]) - yCount(d[1])))
           .attr('fill', bucketColors[colorKey])
+          .attr('opacity', (d) => (d.data.isIncomplete ? 0.42 : 1))
           .attr('rx', isTop ? 6 : 0)
           .attr('ry', isTop ? 6 : 0);
       });
@@ -532,8 +536,9 @@ export default function DelayTimeline({
         .attr('y', (d) => yCount(d.count))
         .attr('width', barWidth)
         .attr('height', (d) => Math.max(0, mainInnerHeight - yCount(d.count)))
-        .attr('fill', requestCountBarColor)
-        .attr('rx', 6)
+          .attr('fill', requestCountBarColor)
+          .attr('opacity', (d) => (d.isIncomplete ? 0.42 : 1))
+          .attr('rx', 6)
         .attr('ry', 6);
     }
 
@@ -550,6 +555,7 @@ export default function DelayTimeline({
       .attr('stroke', lineColor)
       .attr('stroke-width', 2.5)
       .attr('stroke-dasharray', viewMode === 'unresolved' ? '6 4' : null)
+      .attr('opacity', visibleData.some((d) => d.isIncomplete) ? 0.88 : 1)
       .attr('d', lineGen);
 
     if (!linePath.attr('d')) {
@@ -567,6 +573,7 @@ export default function DelayTimeline({
       .attr('fill', (d) => (d[`${hoursKey}_anomaly`] ? colors.error : lineColor))
       .attr('stroke', (d) => (d[`${hoursKey}_anomaly`] ? dotStrokeColor : 'none'))
       .attr('stroke-width', (d) => (d[`${hoursKey}_anomaly`] ? 1.5 : 0))
+      .attr('opacity', (d) => (d.isIncomplete ? 0.45 : 1))
       .attr('pointer-events', 'none');
 
     // Hover overlays
@@ -789,6 +796,12 @@ export default function DelayTimeline({
             </Stack>
           ))}
         </Stack>
+      )}
+
+      {viewMode === 'resolved' && chartData.length > 0 && (
+        <Typography variant="caption" sx={{ color: colors.textSecondary, mt: 0.75, display: 'block', lineHeight: 1.45 }}>
+          Recent months may understate average response time because slower requests are still open and excluded from resolved averages. Lighter bars mark the most recent incomplete months.
+        </Typography>
       )}
 
       {hasLineAnomalies && (

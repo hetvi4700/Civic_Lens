@@ -12,6 +12,25 @@ from sklearn.metrics import (
     classification_report,
 )
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# TRAINING SCRIPT — p95 winsorization path (NOT the deployed model)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This script trains on data/features_2024_2025_p95.parquet, where response_hours
+# was winsorized at the train-split p95 (~591 h) by data_claude.py.
+#
+# It saves backend/models/catboost_model_2024_2025_p95.pkl.
+#
+# The DEPLOYED / DASHBOARD model is different:
+#   - Parquet: features_2024_2025.parquet (p90 winsorization, ~231 h cap)
+#   - Model:   backend/models/catboost_model_2024_2025.pkl
+#   - Stats:   backend/models/feature_stats_full.pkl
+#
+# Reported bucket-accuracy metrics in project docs (especially 7+ Days recall)
+# came from the p90 deployed model, not from this p95 training run.
+# Do not assume training.py reproduces production inference artifacts.
+# ═══════════════════════════════════════════════════════════════════════════════
+
 os.makedirs("models", exist_ok=True)
 
 FEATURES_FILE = "data/features_2024_2025_p95.parquet"

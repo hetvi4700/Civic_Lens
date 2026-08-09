@@ -148,8 +148,10 @@ export default function DashboardPage() {
   );
 
   const delayDrivers = useMemo(
-    () => (statsData ? buildDelayDrivers(complaintStats) : []),
-    [statsData, complaintStats],
+    () => (statsData
+      ? buildDelayDrivers(complaintStats, timelineData[0]?.year ?? null)
+      : []),
+    [statsData, complaintStats, timelineData],
   );
 
   if (!showLoadingState && error && !hasData) {
