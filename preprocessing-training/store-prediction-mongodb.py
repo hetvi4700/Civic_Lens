@@ -25,6 +25,7 @@ COLLECTION = "requests_clean"
 TARGET_YEAR = int(os.environ.get("TARGET_YEAR", "2026"))
 REPREDICT = os.environ.get("REPREDICT", "true").lower() in ("1", "true", "yes")
 PREDICT_LIMIT = int(os.environ["PREDICT_LIMIT"]) if os.environ.get("PREDICT_LIMIT") else None
+PREDICT_SKIP = int(os.environ.get("PREDICT_SKIP", "0"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 TOP_SHAP_FEATURES = 8
 BULK_BATCH_SIZE = 1000
@@ -82,68 +83,90 @@ def load_lookup_maps(feature_stats):
 
 
 def compute_workload(collection, docs_df):
-    """Rolling 24h / 7d agency workload from pre-target-year MongoDB history + batch rows.
+    """Rolling 24h / 7d workload from MongoDB window counts (batch-size independent).
 
-    Matches the former parquet path: history is all records with created_date <
-    TARGET_YEAR-01-01; target-year counts come only from the current prediction
-    batch. Process the full unresolved batch for correct intra-year workload.
+    One MongoDB query loads candidate history for all agencies in the batch.
+    Each target row then counts records where agency matches and
+    created_date is in [T-window, T) — strict upper bound preserves closed='left'.
+
+    Parquet-path semantics preserved:
+      - Pre-target-year history: resolved records only (is_unresolved=0), matching
+        features_2024_2025.parquet which was built from closed requests only.
+      - Target-year history: unresolved records only (is_unresolved=1), matching
+        the former prediction batch which queried is_unresolved=1.
     """
     print("Computing agency workload features from MongoDB...")
-    target = docs_df[["created_date", "agency", "unique_key", "_row_id"]].copy()
+    target = docs_df[["created_date", "agency", "_row_id"]].copy()
     target["created_date"] = pd.to_datetime(target["created_date"])
+    target["agency"] = target["agency"].astype(str)
 
-    agencies = target["agency"].dropna().astype(str).unique().tolist()
+    agencies = target["agency"].dropna().unique().tolist()
     if not agencies:
         return pd.DataFrame(
             {"agency_workload_24h": [], "agency_workload_7d": []},
             index=docs_df["_row_id"],
         )
 
-    target_year_start = datetime(TARGET_YEAR, 1, 1)
-    hist_rows = list(
-        collection.find(
+    target_year_start = pd.Timestamp(datetime(TARGET_YEAR, 1, 1))
+    min_date = target["created_date"].min() - pd.Timedelta(days=7)
+    max_date = target["created_date"].max()
+
+    history_query = {
+        "agency": {"$in": agencies},
+        "$or": [
             {
-                "agency": {"$in": agencies},
-                "created_date": {"$lt": target_year_start},
+                "created_date": {
+                    "$gte": min_date.to_pydatetime(),
+                    "$lt": target_year_start.to_pydatetime(),
+                },
+                "is_unresolved": 0,
             },
-            {"_id": 0, "created_date": 1, "agency": 1, "unique_key": 1},
-        )
-    )
-    hist = pd.DataFrame(hist_rows)
-    if hist.empty:
-        hist = pd.DataFrame(columns=["created_date", "agency", "unique_key"])
-    hist["created_date"] = pd.to_datetime(hist["created_date"])
-
-    combined = pd.concat(
-        [
-            hist.assign(_row_id=np.nan, _is_target=0),
-            target.assign(_is_target=1),
+            {
+                "created_date": {
+                    "$gte": max(min_date, target_year_start).to_pydatetime(),
+                    "$lt": max_date.to_pydatetime(),
+                },
+                "is_unresolved": 1,
+            },
         ],
-        ignore_index=True,
-    ).sort_values("created_date")
-
-    indexed = combined.set_index("created_date")
-
-    for window, col in [("24h", "agency_workload_24h"), ("7D", "agency_workload_7d")]:
-        workload = (
-            indexed.groupby("agency")["unique_key"]
-            .rolling(window, closed="left")
-            .count()
-            .reset_index()
-            .rename(columns={"unique_key": col})
-            .drop_duplicates(subset=["created_date", "agency"], keep="last")
-        )
-        combined = combined.merge(workload, on=["created_date", "agency"], how="left")
-
-    combined["agency_workload_24h"] = combined["agency_workload_24h"].fillna(0)
-    combined["agency_workload_7d"] = combined["agency_workload_7d"].fillna(0)
-
-    out = (
-        combined[combined["_is_target"] == 1]
-        .set_index("_row_id")[["agency_workload_24h", "agency_workload_7d"]]
-        .sort_index()
+    }
+    hist_rows = list(
+        collection.find(history_query, {"_id": 0, "created_date": 1, "agency": 1})
     )
-    return out
+    print(f"  Workload history query returned {len(hist_rows):,} records (1 query)")
+
+    if hist_rows:
+        hist = pd.DataFrame(hist_rows)
+        hist["created_date"] = pd.to_datetime(hist["created_date"])
+        hist["agency"] = hist["agency"].astype(str)
+        hist_by_agency = {
+            agency: np.sort(group["created_date"].values.astype("datetime64[ns]"))
+            for agency, group in hist.groupby("agency")
+        }
+    else:
+        hist_by_agency = {}
+
+    def _window_count(sorted_times: np.ndarray, end: pd.Timestamp, window: pd.Timedelta) -> int:
+        if sorted_times.size == 0:
+            return 0
+        end64 = np.datetime64(end.to_datetime64())
+        start64 = np.datetime64((end - window).to_datetime64())
+        left = np.searchsorted(sorted_times, start64, side="left")
+        right = np.searchsorted(sorted_times, end64, side="left")
+        return int(right - left)
+
+    workload_24h = []
+    workload_7d = []
+    for _, row in target.iterrows():
+        times = hist_by_agency.get(row["agency"], np.array([], dtype="datetime64[ns]"))
+        end = row["created_date"]
+        workload_24h.append(_window_count(times, end, pd.Timedelta(hours=24)))
+        workload_7d.append(_window_count(times, end, pd.Timedelta(days=7)))
+
+    return pd.DataFrame(
+        {"agency_workload_24h": workload_24h, "agency_workload_7d": workload_7d},
+        index=target["_row_id"].values,
+    ).sort_index()
 
 
 def enrich_document(doc, lookups, num_medians, workload):
@@ -234,11 +257,13 @@ query = {
 if not REPREDICT:
     query["predicted_response_hours"] = {"$exists": False}
 
-cursor = collection.find(query)
+cursor = collection.find(query).skip(PREDICT_SKIP)
 if PREDICT_LIMIT:
     cursor = cursor.limit(PREDICT_LIMIT)
 docs = list(cursor)
 print(f"Fetched {len(docs)} unresolved {TARGET_YEAR} complaints")
+if PREDICT_SKIP:
+    print(f"  (skipped first {PREDICT_SKIP:,} via PREDICT_SKIP)")
 
 if len(docs) == 0:
     print("Nothing to process")

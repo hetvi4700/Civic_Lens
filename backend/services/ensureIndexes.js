@@ -11,6 +11,8 @@ export async function ensureRequestIndexes(collection) {
     collection.createIndex({ created_date: 1, borough: 1 }),
     collection.createIndex({ created_date: 1, complaint_type: 1 }),
     collection.createIndex({ created_date: 1, agency: 1 }),
+    // ML workload — agency-first range scans (store-prediction-mongodb compute_workload)
+    collection.createIndex({ agency: 1, created_date: 1 }),
     collection.createIndex({ created_date: 1, status: 1 }),
     collection.createIndex({ created_date: 1, borough: 1, complaint_type: 1 }),
     collection.createIndex({ created_date: 1, latitude: 1, longitude: 1 }),
