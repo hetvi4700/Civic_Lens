@@ -29,7 +29,7 @@ const DB_NAME = process.env.DB_NAME || 'civic_lens';
 
 async function start() {
   try {
-    await mongoose.connect(MONGO, { dbName: DB_NAME });
+    await mongoose.connect(MONGO, { dbName: DB_NAME, autoIndex: false });
     console.log('Connected to MongoDB', DB_NAME);
 
     await trySeedDataIfEmpty();

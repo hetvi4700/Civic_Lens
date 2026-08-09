@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "drop-unused-indexes": "node scripts/drop-unused-indexes.js",
+    "drop-unused-indexes:confirm": "node scripts/drop-unused-indexes.js --confirm"
   },
   "dependencies": {
     "cors": "^2.8.5",

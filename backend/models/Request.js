@@ -17,7 +17,8 @@ const ShapExplanationSchema = new mongoose.Schema({
 const ModelFeaturesSchema = new mongoose.Schema({}, { strict: false, _id: false });
 
 const RequestSchema = new mongoose.Schema({
-  unique_key: { type: String, index: true },
+  // Index managed by services/ensureIndexes.js (autoIndex disabled on connect).
+  unique_key: { type: String },
   created_date: Date,
   closed_date: Date,
   agency: String,
