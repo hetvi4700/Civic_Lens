@@ -5,7 +5,10 @@ import {
   buildMongoFilterExcluding,
 } from '../utils/queryFilters.js';
 import { normalizeMapPoint } from '../utils/delayBuckets.js';
-import { getCached, setCached, buildCacheKey } from './aggregationCache.js';
+import {
+  canDashboardUseRollups,
+  runDashboardAggregationFromRollups,
+} from './rollupAggregation.js';
 import {
   unresolvedCond,
   highDelayCond,
@@ -14,6 +17,7 @@ import {
   formatComplaintDriverRows,
   formatDelayTrendRows,
 } from '../utils/aggregationHelpers.js';
+import { getCached, setCached, buildCacheKey } from './aggregationCache.js';
 
 const GROUP_METRICS = {
   count: { $sum: 1 },
@@ -108,7 +112,7 @@ export async function runStatsAggregation(filter) {
   return formatStatsRow(totals, topComplaint);
 }
 
-export async function runDashboardAggregation(filter, boroughFilter = filter) {
+export async function runDashboardAggregationFromRequests(filter, boroughFilter = filter) {
   const [dashboardResult, boroughRows] = await Promise.all([
     Request.aggregate([
       { $match: filter },
@@ -196,14 +200,32 @@ export async function fetchFastMapPoints(filter, sampleSize = DEFAULT_MAP_POINT_
   return { records, count: records.length, limit };
 }
 
+async function runDashboardViaRollups(req) {
+  const [dashboardResult, boroughResult] = await Promise.all([
+    runDashboardAggregationFromRollups(req),
+    runDashboardAggregationFromRollups(req, { excludeBorough: true }),
+  ]);
+  return formatDashboardBundle({
+    ...dashboardResult,
+    boroughs: boroughResult.boroughs,
+  });
+}
+
 export async function getDashboardBundleData(req) {
   const cacheKey = buildCacheKey('dashboard', req);
   const cached = getCached(cacheKey);
   if (cached) return { payload: cached, cache: 'HIT' };
 
-  const filter = buildMongoFilter(req);
-  const boroughFilter = buildMongoFilterExcluding(req, 'borough');
-  const payload = await runDashboardAggregation(filter, boroughFilter);
+  const rollupCheck = canDashboardUseRollups(req);
+  let payload;
+  if (rollupCheck.ok) {
+    payload = await runDashboardViaRollups(req);
+  } else {
+    console.warn(`Dashboard rollup fallback (${rollupCheck.reason})`);
+    const filter = buildMongoFilter(req);
+    const boroughFilter = buildMongoFilterExcluding(req, 'borough');
+    payload = await runDashboardAggregationFromRequests(filter, boroughFilter);
+  }
   setCached(cacheKey, payload);
   return { payload, cache: 'MISS' };
 }
@@ -231,11 +253,11 @@ export async function warmDefaultCache() {
   const started = Date.now();
   try {
     const filter = buildMongoFilter(emptyQuery);
-    const [dashboard, mapPoints] = await Promise.all([
-      runDashboardAggregation(filter),
-      fetchFastMapPoints(filter),
-    ]);
-
+    const rollupCheck = canDashboardUseRollups(emptyQuery);
+    const dashboard = rollupCheck.ok
+      ? await runDashboardViaRollups(emptyQuery)
+      : await runDashboardAggregationFromRequests(filter);
+    const mapPoints = await fetchFastMapPoints(filter);
     setCached(buildCacheKey('dashboard', emptyQuery), dashboard);
     setCached(buildCacheKey('map', emptyQuery), { stats: dashboard.stats, mapPoints });
     console.log(`Aggregation cache warmed in ${((Date.now() - started) / 1000).toFixed(1)}s`);

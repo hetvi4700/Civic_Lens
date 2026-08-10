@@ -9,6 +9,11 @@ import {
   andMongoFilter,
   buildMapDelayBucketClause,
 } from '../utils/delayBuckets.js';
+import {
+  canDashboardUseRollups,
+  getRollupDistinct,
+  rollupHasDelayBucket,
+} from './rollupAggregation.js';
 
 function sortStr(arr) {
   return arr.filter(Boolean).map(String).sort((a, b) => a.localeCompare(b));
@@ -21,12 +26,23 @@ function buildFacetFilterExcluding(req, excludeField, useMapBuckets) {
 }
 
 async function distinctField(req, excludeField, field, useMapBuckets = false) {
+  if (!useMapBuckets && canDashboardUseRollups(req).ok && ['borough', 'complaint_type', 'agency'].includes(field)) {
+    return getRollupDistinct(field, req, excludeField);
+  }
   const filter = buildFacetFilterExcluding(req, excludeField, useMapBuckets);
   const values = await Request.distinct(field, filter);
   return sortStr(values);
 }
 
 async function distinctDelayBuckets(req) {
+  if (canDashboardUseRollups(req).ok) {
+    const checks = await Promise.all(
+      DELAY_BUCKET_ORDER.map(async (label) => (
+        (await rollupHasDelayBucket(req, label)) ? label : null
+      )),
+    );
+    return DELAY_BUCKET_ORDER.filter((label) => checks.includes(label));
+  }
   const filter = buildMongoFilterExcluding(req, 'delay_bucket');
   const checks = await Promise.all(
     Object.entries(DELAY_BUCKET_RANGES).map(async ([label, range]) => {

@@ -7,7 +7,9 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "drop-unused-indexes": "node scripts/drop-unused-indexes.js",
-    "drop-unused-indexes:confirm": "node scripts/drop-unused-indexes.js --confirm"
+    "drop-unused-indexes:confirm": "node scripts/drop-unused-indexes.js --confirm",
+    "build-rollups": "node scripts/build-rollups.js",
+    "verify-rollups": "node scripts/verify-rollups.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
