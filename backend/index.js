@@ -8,6 +8,7 @@ import { trySeedDataIfEmpty } from './services/seedData.js';
 import { ensureRequestIndexes } from './services/ensureIndexes.js';
 import { warmDefaultCache } from './services/dashboardAggregation.js';
 import { getDefaultRequestFilter, getMlEligibleFilter } from './utils/normalizeRequest.js';
+import { getRequestsCollectionName } from './utils/requestsCollection.js';
 
 dotenv.config();
 
@@ -34,8 +35,10 @@ async function start() {
 
     await trySeedDataIfEmpty();
 
-    const collection = mongoose.connection.db.collection('requests_clean');
+    const collectionName = getRequestsCollectionName();
+    const collection = mongoose.connection.db.collection(collectionName);
     await ensureRequestIndexes(collection);
+    console.log('Requests collection:', collectionName);
 
     const showcaseFilter = getDefaultRequestFilter();
     const mlFilter = getMlEligibleFilter();

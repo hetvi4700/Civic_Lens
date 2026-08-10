@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { getRequestsCollectionName } from '../utils/requestsCollection.js';
 
 const ShapFactorSchema = new mongoose.Schema({
   feature: String,
@@ -57,6 +58,6 @@ const RequestSchema = new mongoose.Schema({
   prediction_model: String,
   prediction_scope: String,
   prediction_generated_at: Date,
-}, { timestamps: false, collection: 'requests_clean', strict: false });
+}, { timestamps: false, collection: getRequestsCollectionName(), strict: false });
 
-export default mongoose.model('Request', RequestSchema, 'requests_clean');
+export default mongoose.model('Request', RequestSchema, getRequestsCollectionName());

@@ -190,7 +190,7 @@ export default function MapPage() {
           page="map"
           eyebrow="Spatial Exploration"
           title="NYC Request Map"
-          description="View 311 requests on a real NYC map, colored by delay bucket, complaint type, status, or prediction risk."
+          description="View 311 requests on a real NYC map, colored by delay bucket, complaint type, status, or prediction risk. Markers show a representative sample (~295k records); dashboard totals reflect the full NYC dataset."
         />
         <MapControlPanel
           facets={facets}
@@ -221,7 +221,7 @@ export default function MapPage() {
         page="map"
         eyebrow="Spatial Exploration"
         title="NYC Request Map"
-        description="View 311 requests on a real NYC map, colored by delay bucket, complaint type, status, or prediction risk."
+        description="View 311 requests on a real NYC map, colored by delay bucket, complaint type, status, or prediction risk. Markers show a representative sample (~295k records); dashboard totals reflect the full NYC dataset."
       />
 
       <MapControlPanel

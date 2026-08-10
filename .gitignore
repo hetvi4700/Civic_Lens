@@ -8,4 +8,4 @@ dist/
 
 # Legacy single-model paths (superseded by backend/models/)
 backend/ML/catboost_model.pkl
-backend/ml/catboost_model.pkl
+backend/dumps/

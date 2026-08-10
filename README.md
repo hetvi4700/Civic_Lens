@@ -141,6 +141,44 @@ The processed dataset is **too large for GitHub** and is shared as a compressed 
 | `DB_NAME` | Database name (default: `civic_lens`) |
 | `PORT` | API port (default: `5001`) |
 | `APP_TOKEN` | NYC Open Data app token — required only for full reproduction scripts |
+| `REQUESTS_COLLECTION` | Detail collection for map/case-list/model (`requests_clean` locally, `requests_sample` on Atlas) |
+| `SHOWCASE_YEAR` | Filters detail queries to showcase year (default: `2026`) |
+
+---
+
+## Atlas deployment (M0 sample)
+
+The full local corpus (~9.2M records, ~3.5 GB) exceeds MongoDB Atlas free tier (512 MB). For deployment:
+
+| Collection | Purpose | Size |
+|------------|---------|------|
+| `monthly_rollups` | Dashboard KPIs, borough burden, complaint drivers, delay trend — built from the **full** 9.2M corpus | ~11 MB |
+| `requests_sample` | Map markers, case list, Model view SHAP detail — stratified **2026-only** subset | ~295k records, ~360 MB |
+
+**Important split:** The dashboard reports real NYC totals (e.g. 1,650,878 requests in 2026) from rollups, while the map shows a representative sample. The map view UI notes this explicitly.
+
+### Build the sample (local only — reads `requests_clean`, writes `requests_sample`)
+
+```bash
+cd backend
+npm run build-sample              # 20k SHAP + 275k plain (defaults)
+npm run build-sample:export       # also writes mongodump to backend/dumps/sample-export/
+node scripts/build-sample.js --shap-count 20000 --plain-count 275000
+REQUESTS_COLLECTION=requests_sample npm run verify-sample
+```
+
+**Field trimming:** Closed/plain records in the sample strip `hour`, `community_board`, and all ML fields. They **cannot be re-featurized on Atlas** without recomputing derived fields from `created_date` and re-running the feature pipeline.
+
+**ML workload caveat:** The batch prediction workload query uses pre-2026 resolved records for historical context. Because the Atlas sample is 2026-only, `agency_workload_24h` and related features will behave differently against Atlas than against the local full collection. This is expected for the demo — flag for the daily incremental pipeline when it is built.
+
+**Export format:** `mongodump` (not `mongoexport`) — preserves BSON types and restores cleanly with `mongorestore`.
+
+```bash
+mongorestore --uri="$MONGODB_URI" --nsInclude=civic_lens.requests_sample backend/dumps/sample-export/
+mongorestore --uri="$MONGODB_URI" --nsInclude=civic_lens.monthly_rollups backend/dumps/rollup-export/
+```
+
+Do **not** rebuild `monthly_rollups` from the sample — dashboard analytics must reflect the full corpus.
 
 ---
 
