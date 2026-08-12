@@ -6,7 +6,8 @@ import {
 } from '../utils/normalizeRequest.js';
 
 const CASE_LIST_PAGE_SIZE = Number(process.env.CASE_LIST_PAGE_SIZE || 50);
-const CASE_LIST_MAX_PAGE = Number(process.env.CASE_LIST_MAX_PAGE || 200);
+export { CASE_LIST_PAGE_SIZE };
+export const CASE_LIST_MAX_PAGE = Number(process.env.CASE_LIST_MAX_PAGE || 200);
 
 const CASE_LIST_PROJECTION = {
   unique_key: 1,
@@ -25,12 +26,12 @@ function isCaseListRequest(req) {
   return req.query.caseList === '1' || req.query.caseList === 'true';
 }
 
-function parseCaseListPagination(req) {
+export function parseCaseListPagination(query = {}) {
   const limit = Math.min(
-    Math.max(Number(req.query.limit) || CASE_LIST_PAGE_SIZE, 1),
+    Math.max(Number(query.limit) || CASE_LIST_PAGE_SIZE, 1),
     CASE_LIST_MAX_PAGE,
   );
-  const skip = Math.max(Number(req.query.skip) || 0, 0);
+  const skip = Math.max(Number(query.skip) || 0, 0);
   return { limit, skip };
 }
 
@@ -60,7 +61,7 @@ export async function getAllRequests(req, res) {
     }
 
     const filter = buildMongoFilter(req);
-    const { limit, skip } = parseCaseListPagination(req);
+    const { limit, skip } = parseCaseListPagination(req.query);
     const countOnly = req.query.countOnly === '1' || req.query.countOnly === 'true';
     const skipCount = req.query.skipCount === '1'
       || req.query.skipCount === 'true'

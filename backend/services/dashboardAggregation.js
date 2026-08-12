@@ -63,7 +63,7 @@ export function resolveMapPointLimit(queryLimit) {
   return Math.min(Math.floor(requested), MAX_MAP_POINT_LIMIT);
 }
 
-function coordFilter(filter) {
+export function coordFilter(filter) {
   return {
     ...filter,
     latitude: { $gte: -90, $lte: 90 },

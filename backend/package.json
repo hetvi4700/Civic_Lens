@@ -12,7 +12,9 @@
     "verify-rollups": "node scripts/verify-rollups.js",
     "build-sample": "node scripts/build-sample.js",
     "build-sample:export": "node scripts/build-sample.js --export",
-    "verify-sample": "node scripts/verify-sample.js"
+    "verify-sample": "node scripts/verify-sample.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -21,6 +23,7 @@
     "mongoose": "^7.0.0"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^2.0.22",
+    "vitest": "^3.2.4"
   }
 }
