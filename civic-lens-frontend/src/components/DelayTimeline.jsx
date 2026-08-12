@@ -193,6 +193,8 @@ function defaultBrushRange(length) {
 
 function pickXTicks(labels, innerWidth) {
   if (labels.length <= 1) return labels;
+  // Short timelines (e.g. showcase-year months) should label every month.
+  if (labels.length <= 6) return labels;
   const maxTicks = Math.max(2, Math.floor(innerWidth / 72));
   if (labels.length <= maxTicks) return labels;
   const step = Math.ceil((labels.length - 1) / (maxTicks - 1));
@@ -352,7 +354,7 @@ export default function DelayTimeline({
 
     const { width, height } = dimensions;
     const topMargin = 8 + legendHeight;
-    const bottomMargin = brushEnabled ? BRUSH_HEIGHT + 12 : (compactFooter ? 28 : 8);
+    const bottomMargin = brushEnabled ? BRUSH_HEIGHT + 12 : (compactFooter ? 36 : 8);
     const margin = {
       top: topMargin,
       right: 6 + RIGHT_AXIS_WIDTH,

@@ -65,6 +65,11 @@ function getMetricValue(entry, metricKey) {
   return Number.isFinite(value) ? value : null;
 }
 
+function formatMetricLabel(entry, metricKey, formatFn) {
+  const value = getMetricValue(entry, metricKey);
+  return value == null ? '—' : formatFn(value);
+}
+
 function getMetricMeta(metricKey) {
   return METRICS.find((metric) => metric.key === metricKey) || METRICS[0];
 }
@@ -494,7 +499,7 @@ export default function ServiceBurdenChoropleth({
         .attr('fill', metricLabelFill)
         .attr('font-size', 10)
         .attr('pointer-events', 'none')
-        .text(metricMeta.format(getMetricValue(d.stats, metric)));
+        .text(formatMetricLabel(d.stats, metric, metricMeta.format));
     });
 
     const legend = root.append('g').attr('transform', `translate(10, ${innerHeight - 54})`);
