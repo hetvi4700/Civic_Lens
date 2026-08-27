@@ -21,7 +21,7 @@ dotenv.config();
 
 const MONGO = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const DB_NAME = process.env.DB_NAME || 'civic_lens';
-const SOURCE = 'requests_clean';
+const SOURCE = process.env.ROLLUP_SOURCE_COLLECTION || 'requests_clean';
 const TARGET = 'monthly_rollups';
 
 const monthArg = process.argv.find((arg) => arg.startsWith('--month='))?.split('=')[1]

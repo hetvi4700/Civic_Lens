@@ -6,9 +6,8 @@
  * and all ML fields. Those records cannot be re-featurized on Atlas without recomputing
  * derived fields from created_date (and re-running the feature pipeline).
  *
- * The sample is 2026-only. The ML workload history query needs pre-2026 resolved records,
- * so batch prediction against Atlas will behave differently than against the local full
- * collection. Flag for the daily incremental pipeline — not a blocker for demo deploy.
+ * The sample is 2026-only for map/case-list detail. A separate late-Dec resolved
+ * workload_history slice (~5k) supports early-January lookbacks for batch prediction.
  *
  * monthly_rollups is NOT rebuilt here — keep rollups from the full 9.2M corpus so the
  * dashboard reports real NYC totals while map/case-list use this sample.
@@ -38,6 +37,7 @@ const TARGET = 'requests_sample';
 
 const DEFAULT_SHAP_COUNT = 20000;
 const DEFAULT_PLAIN_COUNT = 275000;
+const DEFAULT_WORKLOAD_HISTORY_COUNT = 5000;
 const HEAT_CAP_FRACTION = 0.25;
 const BATCH = 500;
 
@@ -121,6 +121,7 @@ function parseArgs() {
   return {
     shapCount: readNum('--shap-count', DEFAULT_SHAP_COUNT),
     plainCount: readNum('--plain-count', DEFAULT_PLAIN_COUNT),
+    workloadHistoryCount: readNum('--workload-history-count', DEFAULT_WORKLOAD_HISTORY_COUNT),
     exportDump: args.includes('--export'),
   };
 }
@@ -154,6 +155,11 @@ function plainPoolMatch(base) {
 function trimDocument(doc, tier) {
   const out = { ...doc };
   delete out._id;
+  if (tier === 'workload') {
+    PLAIN_STRIP_FIELDS.forEach((key) => delete out[key]);
+    out.sample_role = 'workload_history';
+    return out;
+  }
   const strip = tier === 'shap' ? SHAP_STRIP_FIELDS : PLAIN_STRIP_FIELDS;
   strip.forEach((key) => delete out[key]);
   return out;
@@ -377,6 +383,43 @@ async function topUp(source, poolMatch, docs, targetCount, excludeExtra = []) {
   return merged;
 }
 
+function workloadHistoryMatch(year) {
+  // Late December (year-1) — reachable by 7-day lookbacks from early January in showcase year.
+  return {
+    created_date: {
+      $gte: new Date(Date.UTC(year - 1, 11, 15)),
+      $lt: new Date(Date.UTC(year, 0, 1)),
+    },
+    is_unresolved: 0,
+  };
+}
+
+async function fillWorkloadHistory(source, year, budget, excludeKeys) {
+  if (budget <= 0) return [];
+  const match = workloadHistoryMatch(year);
+  const perAgency = Math.max(1, Math.floor(budget / AGENCIES.length));
+  const docs = [];
+  const exclude = new Set(excludeKeys);
+  console.log(`Phase 3: workload history — ${budget.toLocaleString()} late-Dec ${year - 1} resolved (stratified by agency)...`);
+
+  for (const agency of AGENCIES) {
+    const batch = await sampleStratum(
+      source,
+      { ...match, agency },
+      perAgency,
+      exclude,
+    );
+    for (const doc of batch) {
+      if (!exclude.has(doc.unique_key)) {
+        exclude.add(doc.unique_key);
+        docs.push(doc);
+      }
+    }
+  }
+
+  return topUp(source, match, docs, budget, [...exclude]);
+}
+
 async function writeBatches(collection, docs, tier) {
   let written = 0;
   for (let i = 0; i < docs.length; i += BATCH) {
@@ -399,14 +442,14 @@ function runMongodump(dbName, collection, outDir) {
 
 async function main() {
   const started = Date.now();
-  const { shapCount, plainCount, exportDump } = parseArgs();
+  const { shapCount, plainCount, workloadHistoryCount, exportDump } = parseArgs();
   const year = getShowcaseYear();
   const base = showcaseFilter(year);
   const shapMatch = shapPoolMatch(base);
   const plainMatch = plainPoolMatch(base);
 
   console.log(`Building ${TARGET} from ${SOURCE} (showcase year ${year})`);
-  console.log(`Targets: ${shapCount.toLocaleString()} SHAP + ${plainCount.toLocaleString()} plain`);
+  console.log(`Targets: ${shapCount.toLocaleString()} SHAP + ${plainCount.toLocaleString()} plain + ${workloadHistoryCount.toLocaleString()} workload history`);
 
   await mongoose.connect(MONGO, { dbName: DB_NAME, autoIndex: false });
   const db = mongoose.connection.db;
@@ -445,7 +488,14 @@ async function main() {
   console.log('\nWriting to requests_sample...');
   const shapWritten = await writeBatches(target, shapDocs, 'shap');
   const plainWritten = await writeBatches(target, plainDocs, 'plain');
-  console.log(`  wrote ${shapWritten.toLocaleString()} SHAP + ${plainWritten.toLocaleString()} plain`);
+
+  const allDetailKeys = [...shapDocs, ...plainDocs].map((d) => d.unique_key);
+  const workloadDocs = await fillWorkloadHistory(source, year, workloadHistoryCount, allDetailKeys);
+  const workloadWritten = await writeBatches(target, workloadDocs, 'workload');
+
+  console.log(
+    `  wrote ${shapWritten.toLocaleString()} SHAP + ${plainWritten.toLocaleString()} plain + ${workloadWritten.toLocaleString()} workload history`,
+  );
 
   console.log('Creating indexes...');
   await ensureRequestIndexes(target);
@@ -455,15 +505,17 @@ async function main() {
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 
   console.log('\n=== Sample build complete ===');
+  console.log(`Tier counts:   ${shapWritten.toLocaleString()} SHAP + ${plainWritten.toLocaleString()} plain + ${workloadWritten.toLocaleString()} workload`);
   console.log(`Documents:     ${(collStats.count ?? 0).toLocaleString()}`);
-  console.log(`Storage size:  ${((collStats.size ?? 0) / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`Logical size:  ${((collStats.size ?? 0) / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`Storage size:  ${((collStats.storageSize ?? 0) / 1024 / 1024).toFixed(2)} MB (on-disk, compressed)`);
   console.log(`Index size:    ${((collStats.totalIndexSize ?? 0) / 1024 / 1024).toFixed(2)} MB`);
-  console.log(`Combined data+idx: ${(((collStats.size ?? 0) + (collStats.totalIndexSize ?? 0)) / 1024 / 1024).toFixed(2)} MB`);
+  const sampleDisk = (collStats.storageSize ?? 0) + (collStats.totalIndexSize ?? 0);
+  console.log(`Combined disk: ${(sampleDisk / 1024 / 1024).toFixed(2)} MB (storageSize + indexes)`);
   if (rollupStats) {
-    const rollupTotal = (rollupStats.size ?? 0) + (rollupStats.totalIndexSize ?? 0);
-    const sampleTotal = (collStats.size ?? 0) + (collStats.totalIndexSize ?? 0);
-    console.log(`+ monthly_rollups: ${(rollupTotal / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`Atlas total est:   ${((rollupTotal + sampleTotal) / 1024 / 1024).toFixed(2)} MB`);
+    const rollupDisk = (rollupStats.storageSize ?? 0) + (rollupStats.totalIndexSize ?? 0);
+    console.log(`+ monthly_rollups: ${(rollupDisk / 1024 / 1024).toFixed(2)} MB (storageSize + indexes)`);
+    console.log(`Atlas total est:   ${((rollupDisk + sampleDisk) / 1024 / 1024).toFixed(2)} MB`);
   }
   console.log(`Elapsed:       ${elapsed}s`);
 

@@ -1,0 +1,58 @@
+name: Daily Pipeline
+
+# NOTE: Scheduled workflows on public repos are auto-disabled after 60 days
+# of repository inactivity. Re-enable manually in the Actions tab if needed.
+
+on:
+  # Off-peak UTC: 06:00 daily (~2 AM ET / 11 PM PT). Uncomment after Atlas verification.
+  # schedule:
+  #   - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run-pipeline:
+    name: Incremental ingest, predict, rollups
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      APP_TOKEN: ${{ secrets.APP_TOKEN }}
+      DB_NAME: civic_lens
+      REQUESTS_COLLECTION: requests_sample
+      TARGET_YEAR: "2026"
+      INGEST_DAYS: "3"
+      RETENTION_MONTHS: "6"
+      RETENTION_MAX_DOCS: "320000"
+      ROLLUP_MONTHS: "6"
+      ROLLUP_SOURCE_COLLECTION: requests_clean
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/ML/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Python dependencies
+        run: pip install -r backend/ML/requirements.txt
+
+      - name: Install Node dependencies (rollups)
+        working-directory: backend
+        run: npm ci
+
+      - name: Run daily pipeline
+        working-directory: preprocessing-training
+        run: python daily_pipeline.py

@@ -40,17 +40,29 @@ async function main() {
 
   const collStats = await db.command({ collStats: COLLECTION });
   const rollupStats = await db.command({ collStats: 'monthly_rollups' }).catch(() => null);
-  const sampleMb = ((collStats.size ?? 0) + (collStats.totalIndexSize ?? 0)) / 1024 / 1024;
-  const rollupMb = rollupStats
-    ? ((rollupStats.size ?? 0) + (rollupStats.totalIndexSize ?? 0)) / 1024 / 1024
+  const toMb = (bytes) => (bytes ?? 0) / 1024 / 1024;
+  const sampleDiskMb = toMb((collStats.storageSize ?? 0) + (collStats.totalIndexSize ?? 0));
+  const sampleLogicalMb = toMb((collStats.size ?? 0) + (collStats.totalIndexSize ?? 0));
+  const rollupDiskMb = rollupStats
+    ? toMb((rollupStats.storageSize ?? 0) + (rollupStats.totalIndexSize ?? 0))
     : 0;
+  const rollupLogicalMb = rollupStats
+    ? toMb((rollupStats.size ?? 0) + (rollupStats.totalIndexSize ?? 0))
+    : 0;
+  const combinedDiskMb = sampleDiskMb + rollupDiskMb;
+  const ATLAS_BUDGET_MB = 450;
 
-  console.log('Storage:');
-  console.log(`  ${COLLECTION}: ${sampleMb.toFixed(2)} MB (${collStats.count} docs)`);
-  console.log(`  monthly_rollups: ${rollupMb.toFixed(2)} MB`);
-  console.log(`  combined: ${(sampleMb + rollupMb).toFixed(2)} MB (budget: 450 MB)\n`);
-
+  console.log('Storage (Atlas bills on-disk compressed storageSize + indexes):');
+  console.log(`  ${COLLECTION}: ${sampleDiskMb.toFixed(2)} MB on disk (${collStats.count} docs)`);
+  console.log(`    logical BSON + indexes: ${sampleLogicalMb.toFixed(2)} MB`);
+  console.log(`  monthly_rollups: ${rollupDiskMb.toFixed(2)} MB on disk`);
+  if (rollupStats) console.log(`    logical BSON + indexes: ${rollupLogicalMb.toFixed(2)} MB`);
+  console.log(`  combined on disk: ${combinedDiskMb.toFixed(2)} MB (Atlas budget: ${ATLAS_BUDGET_MB} MB)`);
+  console.log(`  combined logical: ${(sampleLogicalMb + rollupLogicalMb).toFixed(2)} MB (uncompressed reference)\n`);
   const issues = [];
+  if (combinedDiskMb > ATLAS_BUDGET_MB) {
+    issues.push(`Atlas on-disk total ${combinedDiskMb.toFixed(2)} MB exceeds ${ATLAS_BUDGET_MB} MB budget`);
+  }
 
   // 1. Default filters — map + case list + count
   const defaultReq = { query: {} };

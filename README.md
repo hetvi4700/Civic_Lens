@@ -167,9 +167,9 @@ node scripts/build-sample.js --shap-count 20000 --plain-count 275000
 REQUESTS_COLLECTION=requests_sample npm run verify-sample
 ```
 
-**Field trimming:** Closed/plain records in the sample strip `hour`, `community_board`, and all ML fields. They **cannot be re-featurized on Atlas** without recomputing derived fields from `created_date` and re-running the feature pipeline.
+**Deployed workload features:** `agency_workload_24h` and `agency_workload_7d` count **resolved** requests (`is_unresolved=0`) in `[T−24h, T)` and `[T−7d, T)` from the detail collection (`REQUESTS_COLLECTION`, typically `requests_sample` on Atlas) — matching `data_claude.py` training semantics (resolved-only load before rolling). Values are **sample-density dependent**: the Atlas sample has far fewer records per agency-day than the 9.2M training corpus, so workload numbers on Atlas will differ from local full-corpus runs for the same agency and timestamp.
 
-**ML workload caveat:** The batch prediction workload query uses pre-2026 resolved records for historical context. Because the Atlas sample is 2026-only, `agency_workload_24h` and related features will behave differently against Atlas than against the local full collection. This is expected for the demo — flag for the daily incremental pipeline when it is built.
+**Field trimming:** Closed/plain records in the sample strip `hour`, `community_board`, and all ML fields. They **cannot be re-featurized on Atlas** without recomputing derived fields from `created_date` and re-running the feature pipeline.
 
 **Export format:** `mongodump` (not `mongoexport`) — preserves BSON types and restores cleanly with `mongorestore`.
 

@@ -20,12 +20,13 @@ PREDICTION_MODEL = "catboost_2024_2025"
 
 MONGO_URI = os.environ.get("MONGODB_URI", os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
 DB_NAME = os.environ.get("DB_NAME", "civic_lens")
-COLLECTION = "requests_clean"
+COLLECTION = os.environ.get("REQUESTS_COLLECTION", os.environ.get("COLLECTION", "requests_clean"))
 
 TARGET_YEAR = int(os.environ.get("TARGET_YEAR", "2026"))
 REPREDICT = os.environ.get("REPREDICT", "true").lower() in ("1", "true", "yes")
 PREDICT_LIMIT = int(os.environ["PREDICT_LIMIT"]) if os.environ.get("PREDICT_LIMIT") else None
 PREDICT_SKIP = int(os.environ.get("PREDICT_SKIP", "0"))
+PREDICT_MONTH = os.environ.get("PREDICT_MONTH")  # optional YYYY-MM scope
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 TOP_SHAP_FEATURES = 8
 BULK_BATCH_SIZE = 1000
@@ -85,15 +86,8 @@ def load_lookup_maps(feature_stats):
 def compute_workload(collection, docs_df):
     """Rolling 24h / 7d workload from MongoDB window counts (batch-size independent).
 
-    One MongoDB query loads candidate history for all agencies in the batch.
-    Each target row then counts records where agency matches and
-    created_date is in [T-window, T) — strict upper bound preserves closed='left'.
-
-    Parquet-path semantics preserved:
-      - Pre-target-year history: resolved records only (is_unresolved=0), matching
-        features_2024_2025.parquet which was built from closed requests only.
-      - Target-year history: unresolved records only (is_unresolved=1), matching
-        the former prediction batch which queried is_unresolved=1.
+    Semantics match data_claude.py: count resolved requests (is_unresolved=0) in
+    [T-window, T) via a single time-relative history query — no year split.
     """
     print("Computing agency workload features from MongoDB...")
     target = docs_df[["created_date", "agency", "_row_id"]].copy()
@@ -107,33 +101,24 @@ def compute_workload(collection, docs_df):
             index=docs_df["_row_id"],
         )
 
-    target_year_start = pd.Timestamp(datetime(TARGET_YEAR, 1, 1))
     min_date = target["created_date"].min() - pd.Timedelta(days=7)
     max_date = target["created_date"].max()
 
+    projection = {"_id": 0, "created_date": 1, "agency": 1}
+
     history_query = {
         "agency": {"$in": agencies},
-        "$or": [
-            {
-                "created_date": {
-                    "$gte": min_date.to_pydatetime(),
-                    "$lt": target_year_start.to_pydatetime(),
-                },
-                "is_unresolved": 0,
-            },
-            {
-                "created_date": {
-                    "$gte": max(min_date, target_year_start).to_pydatetime(),
-                    "$lt": max_date.to_pydatetime(),
-                },
-                "is_unresolved": 1,
-            },
-        ],
+        "created_date": {
+            "$gte": min_date.to_pydatetime(),
+            "$lt": max_date.to_pydatetime(),
+        },
+        "is_unresolved": 0,
     }
-    hist_rows = list(
-        collection.find(history_query, {"_id": 0, "created_date": 1, "agency": 1})
+    hist_rows = list(collection.find(history_query, projection))
+    print(
+        f"  Workload history: {len(hist_rows):,} resolved records "
+        f"({min_date.date()} → {max_date.date()}, 1 indexed query)"
     )
-    print(f"  Workload history query returned {len(hist_rows):,} records (1 query)")
 
     if hist_rows:
         hist = pd.DataFrame(hist_rows)
@@ -253,6 +238,17 @@ query = {
     },
     "is_unresolved": 1,
 }
+
+if PREDICT_MONTH:
+    month_year, month_num = PREDICT_MONTH.split("-", 1)
+    month_start = datetime(int(month_year), int(month_num), 1)
+    month_end = (
+        datetime(int(month_year) + 1, 1, 1)
+        if int(month_num) == 12
+        else datetime(int(month_year), int(month_num) + 1, 1)
+    )
+    query["created_date"] = {"$gte": month_start, "$lt": month_end}
+    print(f"Predict scope limited to month {PREDICT_MONTH}")
 
 if not REPREDICT:
     query["predicted_response_hours"] = {"$exists": False}

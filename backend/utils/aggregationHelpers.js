@@ -76,29 +76,37 @@ export function formatBoroughBurdenRows(rows) {
     };
   });
 
-  const normalizedCounts = normalizeSeries(rawStats.map((entry) => entry.count));
-  const normalizedResponse = normalizeSeries(rawStats.map((entry) => entry.avgResponseHours));
-  const normalizedUnresolved = normalizeSeries(rawStats.map((entry) => entry.unresolvedRate));
-  const normalizedHighDelay = normalizeSeries(rawStats.map((entry) => entry.highDelayRate));
+  const burdenEligible = rawStats.filter((entry) => BOROUGH_CENTERS[entry.borough]);
+  const normalizedCounts = normalizeSeries(burdenEligible.map((entry) => entry.count));
+  const normalizedResponse = normalizeSeries(burdenEligible.map((entry) => entry.avgResponseHours));
+  const normalizedUnresolved = normalizeSeries(burdenEligible.map((entry) => entry.unresolvedRate));
+  const normalizedHighDelay = normalizeSeries(burdenEligible.map((entry) => entry.highDelayRate));
 
-  return rawStats
-    .map((entry, index) => {
-      const center = BOROUGH_CENTERS[entry.borough] || { lat: 40.7128, lng: -74.006 };
-      const burdenScore = round(
+  const burdenScores = new Map();
+  burdenEligible.forEach((entry, index) => {
+    burdenScores.set(
+      entry.borough,
+      round(
         0.3 * normalizedCounts[index]
         + 0.3 * normalizedResponse[index]
         + 0.25 * normalizedUnresolved[index]
         + 0.15 * normalizedHighDelay[index],
         4,
-      );
+      ),
+    );
+  });
+
+  return rawStats
+    .map((entry) => {
+      const center = BOROUGH_CENTERS[entry.borough] || { lat: 40.7128, lng: -74.006 };
       return {
         ...entry,
-        burdenScore,
+        burdenScore: burdenScores.get(entry.borough) ?? null,
         lat: center.lat,
         lng: center.lng,
       };
     })
-    .sort((a, b) => b.burdenScore - a.burdenScore);
+    .sort((a, b) => (b.burdenScore ?? -1) - (a.burdenScore ?? -1));
 }
 
 export function formatComplaintDriverRows(rows, limit = 10) {
