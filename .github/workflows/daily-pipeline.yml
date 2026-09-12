@@ -27,7 +27,7 @@ jobs:
       TARGET_YEAR: "2026"
       INGEST_DAYS: "3"
       RETENTION_MONTHS: "6"
-      RETENTION_MAX_DOCS: "320000"
+      RETENTION_MAX_DOCS: "180000"
       ROLLUP_MONTHS: "6"
       ROLLUP_SOURCE_COLLECTION: requests_clean
 

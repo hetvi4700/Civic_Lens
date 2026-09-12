@@ -2,8 +2,8 @@ import { Box, Stack, Typography, Chip, alpha } from '@mui/material';
 import ArrowUpwardRoundedIcon from '@mui/icons-material/ArrowUpwardRounded';
 import ArrowDownwardRoundedIcon from '@mui/icons-material/ArrowDownwardRounded';
 import { useAppColors } from '../ColorModeContext';
-import { getPredictionSummary, buildShapContributions } from '../utils/mlExplanation';
-import { formatHours } from '../utils/analytics';
+import { getPredictionSummary, buildShapContributionsInHours } from '../utils/mlExplanation';
+import { formatHours, formatShapContribution } from '../utils/analytics';
 import { MODEL_ROW_HEIGHT, cardSubtitleSx, cardTitleSx, smallMetaSx } from '../styles/modelViewLayout';
 import DashboardCard from './DashboardCard';
 
@@ -84,10 +84,7 @@ export default function PredictionOverviewCard({ request, onViewRecord }) {
   const riskPct = Math.max(0, Math.min(1, riskScore)) * 100;
 
   // Top 3 drivers by absolute SHAP contribution
-  const drivers = buildShapContributions(request)
-    .map((row) => ({ ...row, shap: Number(row.shap) || 0 }))
-    .sort((a, b) => Math.abs(b.shap) - Math.abs(a.shap))
-    .slice(0, 3);
+  const drivers = buildShapContributionsInHours(request, { limit: 3 });
 
   return (
     <DashboardCard sx={{ width: '100%' }} contentSx={cardShellSx}>
@@ -202,7 +199,7 @@ export default function PredictionOverviewCard({ request, onViewRecord }) {
                     variant="body2"
                     sx={{ color: tone, fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem', flexShrink: 0, ml: 1 }}
                   >
-                    {up ? '+' : '−'}{Math.round(Math.abs(d.shap))}h
+                    {formatShapContribution(d.shap)}
                   </Typography>
                 </Stack>
               );

@@ -513,7 +513,7 @@ export default function PredictionCaseSelector({
       ) : null}
 
       {selectedRequest ? (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1.25 }}>
+        <Box sx={{ mt: 1.25, minWidth: 0 }}>
           <Chip
             size="small"
             label={formatSelectedSummary(selectedRequest)}
@@ -535,6 +535,22 @@ export default function PredictionCaseSelector({
               border: `1px solid ${alpha(accent, 0.2)}`,
             }}
           />
+          {selectedRequest.unique_key ? (
+            <Typography
+              variant="caption"
+              component="div"
+              sx={{
+                mt: 0.35,
+                fontSize: '0.68rem',
+                lineHeight: 1.2,
+                color: colors.textSecondary,
+                opacity: 0.9,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              #{selectedRequest.unique_key}
+            </Typography>
+          ) : null}
         </Box>
       ) : null}
     </Box>

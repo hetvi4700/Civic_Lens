@@ -1,4 +1,4 @@
-import { formatHours } from './analytics';
+import { formatShapContribution } from './analytics';
 
 export const ML_MODEL_VERSION = 'catboost_v1';
 
@@ -24,6 +24,38 @@ export function getDelayTier(predictedHours) {
   if (hours < 24) return 'low';
   if (hours < 72) return 'medium';
   return 'high';
+}
+
+function isOpenRecord(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (Number(record.is_unresolved) === 1) return true;
+  return String(record.status ?? '').trim() === 'Open';
+}
+
+function hoursBetween(start, end) {
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+  return (endMs - startMs) / (1000 * 60 * 60);
+}
+
+/** Elapsed time for open requests (since created_date); resolved response time for closed. */
+export function getElapsedHours(record) {
+  if (!record) return 0;
+
+  const responseHours = Number(record.response_hours);
+  if (!isOpenRecord(record)) {
+    if (Number.isFinite(responseHours) && responseHours > 0) return responseHours;
+    if (record.closed_date && record.created_date) {
+      return hoursBetween(record.created_date, record.closed_date);
+    }
+    return Number.isFinite(responseHours) ? Math.max(0, responseHours) : 0;
+  }
+
+  if (record.created_date) {
+    return hoursBetween(record.created_date, new Date());
+  }
+  return 0;
 }
 
 export function getDelayTierLabel(recordOrTier) {
@@ -68,9 +100,54 @@ export function buildShapContributions(record) {
   return [];
 }
 
+/** Resolve log1p SHAP anchors for a record (model target is log1p(response_hours)). */
+export function getShapHourContext(record) {
+  const predictedHours = Number(record?.predicted_response_hours) || 0;
+  const factorsLog = mapShapFactors(record) ?? [];
+  const sumShapLog = factorsLog.reduce((sum, row) => sum + row.shap, 0);
+
+  // Anchor on the stored prediction so partial top-feature SHAP sets still reconcile.
+  const predLog = Math.log1p(predictedHours);
+  const baseLog = predLog - sumShapLog;
+  const baselineHours = Math.expm1(baseLog);
+
+  return {
+    baseLog,
+    predLog,
+    baselineHours,
+    predictedHours,
+    factorsLog,
+  };
+}
+
+/**
+ * Convert log1p SHAP contributions to marginal hour deltas (baseline-dependent).
+ * Sorted by |shap| to match the waterfall; hour deltas sum to predicted − baseline.
+ */
+export function buildShapContributionsInHours(record, { limit } = {}) {
+  const { baseLog, factorsLog } = getShapHourContext(record);
+  if (!factorsLog.length) return [];
+
+  const sorted = [...factorsLog].sort((a, b) => Math.abs(b.shap) - Math.abs(a.shap));
+  let runningLog = baseLog;
+
+  const converted = sorted.map((row) => {
+    const hoursBefore = Math.expm1(runningLog);
+    runningLog += row.shap;
+    const hoursAfter = Math.expm1(runningLog);
+    return {
+      ...row,
+      shapLog: row.shap,
+      shap: hoursAfter - hoursBefore,
+    };
+  });
+
+  return limit != null ? converted.slice(0, limit) : converted;
+}
+
 export function buildModelFeatureRows(record) {
   const features = record?.model_features;
-  const shapRows = buildShapContributions(record);
+  const shapRows = buildShapContributionsInHours(record);
 
   if (features && shapRows.length) {
     const shapByFeature = Object.fromEntries(shapRows.map((row) => [row.feature, row]));
@@ -82,8 +159,9 @@ export function buildModelFeatureRows(record) {
         label: shapRow?.label ?? feature.replace(/_/g, ' '),
         value: value ?? '—',
         shap,
+        shapLog: shapRow?.shapLog,
         direction: shap >= 0 ? 'increases' : 'decreases',
-        impactLabel: shap >= 0 ? `+${formatHours(Math.abs(shap))}` : `−${formatHours(Math.abs(shap))}`,
+        impactLabel: formatShapContribution(shap),
       };
     });
   }
@@ -91,7 +169,7 @@ export function buildModelFeatureRows(record) {
   return shapRows.map((row) => ({
     ...row,
     direction: row.shap >= 0 ? 'increases' : 'decreases',
-    impactLabel: row.shap >= 0 ? `+${formatHours(Math.abs(row.shap))}` : `−${formatHours(Math.abs(row.shap))}`,
+    impactLabel: formatShapContribution(row.shap),
   }));
 }
 
@@ -110,24 +188,23 @@ export function getPredictionSummary(record) {
     };
   }
 
-  const predicted = Number(record.predicted_response_hours) || 0;
-  const actual = Number(record.response_hours) || 0;
+  const { baselineHours, predictedHours } = getShapHourContext(record);
+  const elapsed = getElapsedHours(record);
   const confidence = Number(record.prediction_confidence) || 0.75;
-  const shap = record.shap_explanation;
 
   return {
-    predictedHours: predicted,
-    actualHours: actual,
+    predictedHours,
+    actualHours: elapsed,
     confidence,
-    delayTier: record.delay_tier || getDelayTier(predicted),
+    delayTier: record.delay_tier || getDelayTier(predictedHours),
     delayBucket: record.predicted_delay_bucket || 'Same Day',
     riskLevel: record.prediction_risk_level || 'Low',
     riskScore: Number(record.delay_risk_score) || 0,
     modelVersion: record.prediction_model || record.model_version || ML_MODEL_VERSION,
     predictionScope: record.prediction_scope || null,
     predictionGeneratedAt: record.prediction_generated_at || null,
-    baselineHours: shap?.baseline_value ?? Math.max(0, predicted * 0.45),
-    predictionValue: shap?.prediction_value ?? predicted,
+    baselineHours,
+    predictionValue: predictedHours,
   };
 }
 

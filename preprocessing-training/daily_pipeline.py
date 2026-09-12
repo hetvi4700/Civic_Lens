@@ -28,7 +28,7 @@ FULL_CORPUS_COLLECTION = "requests_clean"
 
 DEFAULT_INGEST_DAYS = int(os.environ.get("INGEST_DAYS", "3"))
 DEFAULT_RETENTION_MONTHS = int(os.environ.get("RETENTION_MONTHS", "6"))
-DEFAULT_RETENTION_MAX_DOCS = int(os.environ.get("RETENTION_MAX_DOCS", "320000"))
+DEFAULT_RETENTION_MAX_DOCS = int(os.environ.get("RETENTION_MAX_DOCS", "180000"))
 DEFAULT_ROLLUP_MONTHS = int(os.environ.get("ROLLUP_MONTHS", "6"))
 TARGET_YEAR = os.environ.get("TARGET_YEAR", "2026")
 

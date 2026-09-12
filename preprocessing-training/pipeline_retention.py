@@ -14,7 +14,7 @@ DB_NAME = os.environ.get("DB_NAME", "civic_lens")
 COLLECTION = os.environ.get("REQUESTS_COLLECTION", os.environ.get("COLLECTION", "requests_clean"))
 
 DEFAULT_RETENTION_MONTHS = int(os.environ.get("RETENTION_MONTHS", "6"))
-DEFAULT_MAX_DOCS = int(os.environ.get("RETENTION_MAX_DOCS", "320000"))
+DEFAULT_MAX_DOCS = int(os.environ.get("RETENTION_MAX_DOCS", "180000"))
 TARGET_YEAR = int(os.environ.get("TARGET_YEAR", "2026"))
 WORKLOAD_HISTORY_ROLE = "workload_history"
 SAMPLE_COLLECTION = "requests_sample"

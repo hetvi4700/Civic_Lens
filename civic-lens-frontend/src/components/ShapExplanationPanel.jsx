@@ -3,7 +3,8 @@ import * as d3 from 'd3';
 import { Box, Stack, Typography, Tooltip, alpha } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useAppColors } from '../ColorModeContext';
-import { buildShapContributions } from '../utils/mlExplanation';
+import { buildShapContributionsInHours, getShapHourContext } from '../utils/mlExplanation';
+import { formatShapContribution } from '../utils/analytics';
 import {
   MODEL_ROW_HEIGHT,
   SHAP_CHART_HEIGHT,
@@ -97,9 +98,7 @@ function resolveShortLabel(row) {
 }
 
 function formatShapValue(value) {
-  const n = Number(value) || 0;
-  const sign = n >= 0 ? '+' : '';
-  return `${sign}${n.toFixed(2)}`;
+  return formatShapContribution(Number(value) || 0);
 }
 
 function formatSpeedComparison(baseline, predicted) {
@@ -304,35 +303,34 @@ export default function ShapExplanationPanel({ request }) {
   const [dims, setDims] = useState({ width: 720, height: SHAP_CHART_HEIGHT });
   const [tooltip, setTooltip] = useState(null);
 
-  const shap = request?.shap_explanation;
-  const baseline = Number(shap?.baseline_value ?? 0);
-  const predicted = Number(shap?.prediction_value ?? request?.predicted_response_hours ?? 0);
+  const { baselineHours, predictedHours } = useMemo(
+    () => getShapHourContext(request ?? {}),
+    [request],
+  );
 
   const factors = useMemo(() => {
-    return buildShapContributions(request)
+    return buildShapContributionsInHours(request, { limit: SHAP_FACTOR_LIMIT })
       .map((row) => ({
         ...row,
         label: resolveLabel(row),
         shortLabel: resolveShortLabel(row),
         shap: Number(row.shap) || 0,
-      }))
-      .sort((a, b) => Math.abs(b.shap) - Math.abs(a.shap))
-      .slice(0, SHAP_FACTOR_LIMIT);
+      }));
   }, [request]);
 
-  // Cumulative waterfall steps: each bar walks from its runStart to runEnd
+  // Cumulative waterfall steps: each bar walks from its runStart to runEnd (hour space)
   const steps = useMemo(() => {
-    let running = baseline;
+    let running = baselineHours;
     return factors.map((d) => {
       const runStart = running;
       running += d.shap;
       return { ...d, runStart, runEnd: running };
     });
-  }, [factors, baseline]);
+  }, [factors, baselineHours]);
 
   const headerSummary = useMemo(
-    () => buildHeaderSummary(baseline, predicted),
-    [baseline, predicted],
+    () => buildHeaderSummary(baselineHours, predictedHours),
+    [baselineHours, predictedHours],
   );
 
   const positiveColor = PINK_MID;    // pink — increases
@@ -363,7 +361,7 @@ export default function ShapExplanationPanel({ request }) {
     const rowStep = plotHeight / steps.length;
     const barHeight = Math.min(26, Math.max(12, rowStep - 10));
 
-    const { domain: xDomain } = computeWaterfallXDomain(baseline, predicted, steps);
+    const { domain: xDomain } = computeWaterfallXDomain(baselineHours, predictedHours, steps);
     const domainSpan = xDomain[1] - xDomain[0];
     const tickCount = pickTickCount(plotWidth, domainSpan);
     const xScale = d3.scaleLinear()
@@ -415,9 +413,9 @@ export default function ShapExplanationPanel({ request }) {
         .text(`${t}h`);
     });
 
-    const bx = xScale(baseline);
-    const px = xScale(predicted);
-    const { baselineLabel, predictionLabel } = resolveReferenceLabelLayout(bx, px, baseline, predicted);
+    const bx = xScale(baselineHours);
+    const px = xScale(predictedHours);
+    const { baselineLabel, predictionLabel } = resolveReferenceLabelLayout(bx, px, baselineHours, predictedHours);
 
     // Annotation strip above plot — staggered labels with collision avoidance
     const annotGroup = svg.append('g').attr('transform', `translate(${plotLeft}, ${margin.top - ANNOT_STRIP_HEIGHT})`);
@@ -561,7 +559,7 @@ export default function ShapExplanationPanel({ request }) {
         .attr('pointer-events', 'none')
         .text(shapLabel);
     });
-  }, [steps, dims, colors, positiveColor, negativeColor, baseline, predicted]);
+  }, [steps, dims, colors, positiveColor, negativeColor, baselineHours, predictedHours]);
 
   return (
     <DashboardCard sx={{ width: '100%' }} contentSx={cardShellSx}>

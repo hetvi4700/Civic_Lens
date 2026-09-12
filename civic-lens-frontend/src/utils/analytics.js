@@ -11,6 +11,18 @@ export function formatHours(hours) {
   return `${(value / 24).toFixed(1)}d`;
 }
 
+/** SHAP contribution in the same hour-scale units as the waterfall chart. */
+export function formatShapContribution(hours) {
+  const value = num(hours);
+  const abs = Math.abs(value);
+  const sign = value >= 0 ? '+' : '−';
+  if (abs < 1) {
+    const minutes = Math.round(abs * 60);
+    return minutes === 0 ? `${sign}0m` : `${sign}${minutes}m`;
+  }
+  return `${sign}${abs.toFixed(1)}h`;
+}
+
 export function formatDate(iso) {
   if (!iso) return '—';
   const date = new Date(iso);
