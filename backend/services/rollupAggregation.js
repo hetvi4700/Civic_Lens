@@ -23,7 +23,7 @@ export function canDashboardUseRollups(input = {}) {
   const q = input.query ?? input;
   const search = String(q.search ?? q.q ?? '').trim();
   if (search) {
-    return { ok: false, reason: 'search regex requires requests_clean' };
+    return { ok: false, reason: 'search regex requires live detail collection' };
   }
   if (isActive(q.status) && q.status !== 'Open' && q.status !== 'Closed') {
     return { ok: false, reason: `status=${q.status} is not represented in rollup slices` };

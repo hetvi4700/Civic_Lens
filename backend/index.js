@@ -48,6 +48,12 @@ async function start() {
     ]);
     console.log('2026 dataset:', showcaseCount.toLocaleString(), 'records');
     console.log('ML-eligible (unresolved / Open):', mlEligibleCount.toLocaleString());
+    if (showcaseCount === 0) {
+      console.warn(
+        `WARNING: ${collectionName} returned 0 showcase-year records — `
+        + 'check REQUESTS_COLLECTION and Atlas restore.',
+      );
+    }
 
     app.use('/api/requests', requestsRouter);
     app.use('/api', statsRouter);
@@ -55,6 +61,7 @@ async function start() {
     app.get('/api/health', (_req, res) => res.json({
       ok: true,
       dataSource: 'mongodb',
+      requestsCollection: collectionName,
       showcaseFilter,
       showcaseCount,
       mlEligibleCount,
@@ -62,7 +69,9 @@ async function start() {
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      warmDefaultCache();
+      if (process.env.NODE_ENV !== 'production') {
+        warmDefaultCache();
+      }
     });
   } catch (err) {
     console.error('Failed to start server', err);

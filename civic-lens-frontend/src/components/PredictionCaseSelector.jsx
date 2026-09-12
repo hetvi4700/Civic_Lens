@@ -51,7 +51,7 @@ const SORT_OPTIONS = [
 ];
 
 const LIST_MAX_HEIGHT = 360;
-const ROW_HEIGHT = 44;
+const ROW_HEIGHT = 52;
 
 function truncate(text, max = 32) {
   const value = String(text ?? '');
@@ -136,20 +136,36 @@ function CaseListRow({ record, selected, highlighted, onSelect, colors, mode, ac
         },
       }}
     >
-      <Typography
-        variant="body2"
-        sx={{
-          ...cardSubtitleSx,
-          color: colors.textPrimary,
-          fontWeight: isSelected ? 700 : 600,
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {formatCaseOptionLabel(record)}
-      </Typography>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            ...cardSubtitleSx,
+            color: colors.textPrimary,
+            fontWeight: isSelected ? 700 : 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {formatCaseOptionLabel(record)}
+        </Typography>
+        {record.unique_key ? (
+          <Typography
+            variant="caption"
+            component="span"
+            sx={{
+              display: 'block',
+              color: colors.textSecondary,
+              fontSize: '0.68rem',
+              lineHeight: 1.2,
+              opacity: 0.85,
+            }}
+          >
+            #{record.unique_key}
+          </Typography>
+        ) : null}
+      </Box>
       <CaseDelayBadge record={record} colors={colors} mode={mode} />
     </Box>
   );
